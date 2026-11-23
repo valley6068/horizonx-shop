@@ -1,0 +1,96 @@
+# DonutShop (Rust) for HorizonX. Money is your Essentials money.
+# The shops themselves are the files in shops/ (one file = one shop page, its name = its key).
+# Change anything, then /shop reload.
+# {balance} anywhere in a name or title shows the player's money.
+
+main-menu:
+  title: "&8Shop &7| &a{balance}"
+  rows: 4
+  items:
+    money:
+      slot: 4
+      material: SUNFLOWER
+      name: "&eYour money: &a{balance}"
+    blocks:
+      slot: 10
+      material: GRASS_BLOCK
+      name: "&aBlocks"
+      lore: ["&7Building blocks and wood"]
+      shop-key: blocks
+    ores:
+      slot: 11
+      material: DIAMOND
+      name: "&bOres"
+      lore: ["&7Ores, ingots and gems"]
+      shop-key: ores
+    farming:
+      slot: 12
+      material: WHEAT
+      name: "&eFarming"
+      lore: ["&7Seeds and crops"]
+      shop-key: farming
+    food:
+      slot: 13
+      material: COOKED_BEEF
+      name: "&6Food"
+      lore: ["&7Something to eat"]
+      shop-key: food
+    mobs:
+      slot: 14
+      material: BONE
+      name: "&cMob drops"
+      lore: ["&7What monsters drop"]
+      shop-key: mobs
+    nether:
+      slot: 15
+      material: NETHERRACK
+      name: "&4Nether & End"
+      lore: ["&7Blocks from the other worlds"]
+      shop-key: nether
+    special:
+      slot: 16
+      material: TOTEM_OF_UNDYING
+      name: "&dSpecial"
+      lore: ["&7Rare things"]
+      shop-key: special
+    sell:
+      slot: 22
+      material: CHEST
+      name: "&6Sell items"
+      lore: ["&7Put items in, press the green", "&7button or close it to get paid"]
+      action: sell
+    close:
+      slot: 31
+      material: BARRIER
+      name: "&cClose"
+      action: close
+
+# Most items one buy or sell menu goes up to (36 stacks of 64 = a full inventory).
+max-amount: 2304
+sell-title: "&8Put items in to sell"
+
+# Market: every item's value moves on its own. Most moves are small; now and then one jumps up a lot (boom) or
+# crashes to almost nothing, then drifts back toward its normal price. The prices in shops/ are the normal ones.
+market:
+  enabled: true
+  interval-minutes: 20   # how often prices move
+  swing: 0.06            # normal move each time, up or down (0.06 = up to 6%)
+  boom-chance: 0.02      # chance per item per move of a big jump up (x1.8 to x4)
+  crash-chance: 0.01     # chance per item per move of a crash (down to 0 to 15%)
+  pull-back: 0.05        # how fast a price drifts back to normal each move (0 = never)
+  max: 10                # highest it can go, times normal
+  min-buy: 0.1           # buying never gets cheaper than this times normal (a crashed item isn't free)
+
+messages:
+  bought: "&aBought &f{amount}x {item} &afor &f{price}&a."
+  sold: "&aSold &f{amount} items &afor &f{price}&a."
+  sold-none: "&7Nothing in there could be sold, it was given back."
+  no-money: "&cYou need &f{price}&c, you have &f{balance}&c."
+  no-room: "&cNot enough room in your inventory for {amount}x {item}."
+  no-items: "&cYou don't have any {item} to sell."
+  no-economy: "&cThe shop needs Essentials money, and it isn't running."
+  reloaded: "&aShop reloaded: {shops} shops, {items} items."
+  worth: "&f{item}&7: sells for &6{sell} &7each (&6{stack} &7for your {amount}), buys for &a{buy} &7each."
+  worth-none: "&7The shop doesn't trade {item}."
+  worth-empty: "&7Hold an item to see what it's worth."
+  market-moved: "&6[Market] &7Prices moved. Biggest: &f{up} &a{up_pct} &7and &f{down} &c{down_pct}"

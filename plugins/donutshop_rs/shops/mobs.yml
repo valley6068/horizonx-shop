@@ -1,0 +1,17 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&cMob drops"
+rows: 3
+items:
+  - {material: ROTTEN_FLESH, price: 2, sell-price: 0.3, amount: 32, dynamic-pricing: true, price-change: 0.002, min-price: 1, max-price: 6}
+  - {material: BONE, price: 4, sell-price: 0.8, amount: 32, dynamic-pricing: true, price-change: 0.004, min-price: 2, max-price: 12}
+  - {material: STRING, price: 4, sell-price: 0.8, amount: 32, dynamic-pricing: true, price-change: 0.004, min-price: 2, max-price: 12}
+  - {material: SPIDER_EYE, price: 6, sell-price: 1, amount: 16, dynamic-pricing: true, price-change: 0.006, min-price: 3, max-price: 18}
+  - {material: GUNPOWDER, price: 10, sell-price: 2, amount: 16, dynamic-pricing: true, price-change: 0.01, min-price: 5, max-price: 30}
+  - {material: ENDER_PEARL, price: 60, sell-price: 10, amount: 4, dynamic-pricing: true, price-change: 0.06, min-price: 30, max-price: 180}
+  - {material: SLIME_BALL, price: 20, sell-price: 4, amount: 16, dynamic-pricing: true, price-change: 0.02, min-price: 10, max-price: 60}
+  - {material: BLAZE_ROD, price: 60, sell-price: 12, amount: 4, dynamic-pricing: true, price-change: 0.06, min-price: 30, max-price: 180}
+  - {material: LEATHER, price: 10, sell-price: 2, amount: 16, dynamic-pricing: true, price-change: 0.01, min-price: 5, max-price: 30}
+  - {material: FEATHER, price: 3, sell-price: 0.5, amount: 32, dynamic-pricing: true, price-change: 0.003, min-price: 1.5, max-price: 9}
+  - {material: ARROW, price: 3, sell-price: 0.3, amount: 32, dynamic-pricing: true, price-change: 0.003, min-price: 1.5, max-price: 9}

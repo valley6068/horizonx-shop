@@ -1,0 +1,25 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&aBlocks"
+rows: 4
+items:
+  - {material: DIRT, price: 1, sell-price: 0.1, amount: 64}
+  - {material: GRASS_BLOCK, price: 3, sell-price: 0.2, amount: 64}
+  - {material: COBBLESTONE, price: 1, sell-price: 0.1, amount: 64}
+  - {material: STONE, price: 2, sell-price: 0.2, amount: 64}
+  - {material: DEEPSLATE, price: 2, sell-price: 0.2, amount: 64}
+  - {material: SAND, price: 2, sell-price: 0.2, amount: 64}
+  - {material: GRAVEL, price: 2, sell-price: 0.2, amount: 64}
+  - {material: GLASS, price: 4, sell-price: 0.5, amount: 64}
+  - {material: OAK_LOG, price: 5, sell-price: 1, amount: 64}
+  - {material: SPRUCE_LOG, price: 5, sell-price: 1, amount: 64}
+  - {material: BIRCH_LOG, price: 5, sell-price: 1, amount: 64}
+  - {material: DARK_OAK_LOG, price: 5, sell-price: 1, amount: 64}
+  - {material: CHERRY_LOG, price: 6, sell-price: 1, amount: 64}
+  - {material: BRICKS, price: 8, sell-price: 1, amount: 64}
+  - {material: QUARTZ_BLOCK, price: 20, sell-price: 3, amount: 64}
+  - {material: SMOOTH_STONE, price: 3, sell-price: 0.3, amount: 64}
+  - {material: TERRACOTTA, price: 4, sell-price: 0.5, amount: 64}
+  - {material: WHITE_CONCRETE, price: 4, sell-price: 0.5, amount: 64}
+  - {material: BLACK_CONCRETE, price: 4, sell-price: 0.5, amount: 64}

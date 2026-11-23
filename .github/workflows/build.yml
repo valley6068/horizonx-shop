@@ -1,0 +1,48 @@
+name: build
+# Tests and builds the shop plugin against the HorizonX source, then puts the dll in a pre-release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: SaphirePay/HorizonX
+          path: hx
+          submodules: recursive
+          fetch-depth: 1
+      - name: Rust 1.99.1
+        run: rustup toolchain install 1.99.1 --profile minimal && rustup default 1.99.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            plugins/donutshop_rs/target
+          key: shop-${{ hashFiles('plugins/donutshop_rs/Cargo.toml') }}
+          restore-keys: shop-
+      - name: Test
+        run: cargo test --manifest-path plugins/donutshop_rs/Cargo.toml -- --nocapture
+      - name: Build
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path plugins/donutshop_rs/Cargo.toml
+          if ($LASTEXITCODE) { exit 1 }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item plugins/donutshop_rs/target/release/donutshop_rs.dll out/
+          Copy-Item NOTICE.md out/
+          Get-ChildItem out | ForEach-Object { "{0} {1}" -f $_.Name, $_.Length }
+      - name: Pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v2.0.0-build.${{ github.run_number }}"
+          gh release create "$tag" out/* --prerelease --title "HorizonX Shop $tag" --notes "With HorizonX closed, put donutshop_rs.dll in BOTH folders on the stick, replacing the old one: \`HorizonX Portable\app\plugins\` and \`HorizonX Portable\data\launcher\servers\my-server\plugins\`. Then start the server and type /shop."

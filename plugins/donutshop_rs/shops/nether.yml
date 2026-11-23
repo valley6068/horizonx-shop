@@ -1,0 +1,15 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&4Nether & End"
+rows: 2
+items:
+  - {material: NETHERRACK, price: 1, sell-price: 0.1, amount: 64}
+  - {material: SOUL_SAND, price: 4, sell-price: 0.5, amount: 32}
+  - {material: GLOWSTONE, price: 12, sell-price: 2, amount: 16}
+  - {material: QUARTZ, price: 8, sell-price: 1.5, amount: 32}
+  - {material: MAGMA_BLOCK, price: 8, sell-price: 1, amount: 16}
+  - {material: BLACKSTONE, price: 2, sell-price: 0.2, amount: 64}
+  - {material: OBSIDIAN, price: 40, sell-price: 6, amount: 8}
+  - {material: END_STONE, price: 6, sell-price: 0.8, amount: 64}
+  - {material: SHULKER_SHELL, price: 1500, sell-price: 250, amount: 1}

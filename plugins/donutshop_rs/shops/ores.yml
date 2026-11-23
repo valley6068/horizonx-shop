@@ -1,0 +1,19 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&bOres"
+rows: 3
+items:
+  - {material: COAL, price: 10, sell-price: 2, amount: 16, dynamic-pricing: true, price-change: 0.01, min-price: 5, max-price: 30}
+  - {material: RAW_IRON, price: 20, sell-price: 4, amount: 16, dynamic-pricing: true, price-change: 0.02, min-price: 10, max-price: 60}
+  - {material: IRON_INGOT, price: 25, sell-price: 5, amount: 16, dynamic-pricing: true, price-change: 0.025, min-price: 12.5, max-price: 75}
+  - {material: RAW_COPPER, price: 8, sell-price: 1.5, amount: 16, dynamic-pricing: true, price-change: 0.008, min-price: 4, max-price: 24}
+  - {material: COPPER_INGOT, price: 10, sell-price: 2, amount: 16, dynamic-pricing: true, price-change: 0.01, min-price: 5, max-price: 30}
+  - {material: RAW_GOLD, price: 40, sell-price: 8, amount: 8, dynamic-pricing: true, price-change: 0.04, min-price: 20, max-price: 120}
+  - {material: GOLD_INGOT, price: 50, sell-price: 10, amount: 8, dynamic-pricing: true, price-change: 0.05, min-price: 25, max-price: 150}
+  - {material: REDSTONE, price: 8, sell-price: 1.5, amount: 16, dynamic-pricing: true, price-change: 0.008, min-price: 4, max-price: 24}
+  - {material: LAPIS_LAZULI, price: 12, sell-price: 2, amount: 16, dynamic-pricing: true, price-change: 0.012, min-price: 6, max-price: 36}
+  - {material: EMERALD, price: 150, sell-price: 30, amount: 4, dynamic-pricing: true, price-change: 0.15, min-price: 75, max-price: 450}
+  - {material: DIAMOND, price: 500, sell-price: 100, amount: 1, dynamic-pricing: true, price-change: 0.5, min-price: 250, max-price: 1500}
+  - {material: NETHERITE_SCRAP, price: 2500, sell-price: 500, amount: 1, dynamic-pricing: true, price-change: 2.5, min-price: 1250, max-price: 7500}
+  - {material: NETHERITE_INGOT, price: 10000, sell-price: 2000, amount: 1, dynamic-pricing: true, price-change: 10, min-price: 5000, max-price: 30000}

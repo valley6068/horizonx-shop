@@ -1,0 +1,12 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&dSpecial"
+rows: 2
+items:
+  - {material: EXPERIENCE_BOTTLE, price: 25, sell-price: 0, amount: 16}
+  - {material: NAME_TAG, price: 200, sell-price: 0, amount: 1}
+  - {material: SADDLE, price: 300, sell-price: 0, amount: 1}
+  - {material: TOTEM_OF_UNDYING, price: 5000, sell-price: 800, amount: 1}
+  - {material: ELYTRA, price: 25000, sell-price: 0, amount: 1}
+  - {material: TRIDENT, price: 8000, sell-price: 1000, amount: 1}

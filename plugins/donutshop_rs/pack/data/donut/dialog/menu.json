@@ -1,0 +1,191 @@
+{
+  "type": "minecraft:multi_action",
+  "title": {
+    "text": "Donut",
+    "color": "#f5a3c7",
+    "bold": true
+  },
+  "external_title": {
+    "text": "Donut",
+    "color": "#f5a3c7"
+  },
+  "columns": 2,
+  "can_close_with_escape": true,
+  "after_action": "close",
+  "actions": [
+    {
+      "label": {
+        "text": "Shop",
+        "color": "#f5a3c7"
+      },
+      "tooltip": {
+        "text": "Buy and sell items"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "shop"
+      }
+    },
+    {
+      "label": {
+        "text": "Sell items",
+        "color": "#fbbf24"
+      },
+      "tooltip": {
+        "text": "Put items in a chest, close to get paid"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "shop sell"
+      }
+    },
+    {
+      "label": {
+        "text": "Home",
+        "color": "#7dd3fc"
+      },
+      "tooltip": {
+        "text": "Go to your home"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "home"
+      }
+    },
+    {
+      "label": {
+        "text": "Set home",
+        "color": "#7dd3fc"
+      },
+      "tooltip": {
+        "text": "Make this spot your home"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "sethome"
+      }
+    },
+    {
+      "label": {
+        "text": "Spawn",
+        "color": "#a7f3d0"
+      },
+      "tooltip": {
+        "text": "Back to spawn"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "spawn"
+      }
+    },
+    {
+      "label": {
+        "text": "Random teleport",
+        "color": "#a7f3d0"
+      },
+      "tooltip": {
+        "text": "Somewhere random and safe in the wild"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "rtp"
+      }
+    },
+    {
+      "label": {
+        "text": "Auction house",
+        "color": "#c4b5fd"
+      },
+      "tooltip": {
+        "text": "Buy from and sell to other players"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "ah"
+      }
+    },
+    {
+      "label": {
+        "text": "Vault",
+        "color": "#c4b5fd"
+      },
+      "tooltip": {
+        "text": "Your own storage"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "pv 1"
+      }
+    },
+    {
+      "label": {
+        "text": "Warps",
+        "color": "#fde68a"
+      },
+      "tooltip": {
+        "text": "Places on the server"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "warp"
+      }
+    },
+    {
+      "label": {
+        "text": "Jobs",
+        "color": "#fde68a"
+      },
+      "tooltip": {
+        "text": "Get paid for mining, farming and more"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "jobs browse"
+      }
+    },
+    {
+      "label": {
+        "text": "Balance",
+        "color": "#86efac"
+      },
+      "tooltip": {
+        "text": "How much money you have"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "balance"
+      }
+    },
+    {
+      "label": {
+        "text": "Who's online",
+        "color": "#86efac"
+      },
+      "tooltip": {
+        "text": "Players on the server"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "list"
+      }
+    }
+  ],
+  "exit_action": {
+    "label": {
+      "text": "Back"
+    },
+    "width": 200
+  }
+}

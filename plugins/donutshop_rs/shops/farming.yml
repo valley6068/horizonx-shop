@@ -1,0 +1,19 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&eFarming"
+rows: 3
+items:
+  - {material: WHEAT_SEEDS, price: 2, sell-price: 0.2, amount: 32}
+  - {material: WHEAT, price: 4, sell-price: 1, amount: 32}
+  - {material: CARROT, price: 4, sell-price: 1, amount: 32}
+  - {material: POTATO, price: 4, sell-price: 1, amount: 32}
+  - {material: BEETROOT, price: 4, sell-price: 1, amount: 32}
+  - {material: SUGAR_CANE, price: 4, sell-price: 1, amount: 32}
+  - {material: PUMPKIN, price: 8, sell-price: 2, amount: 16}
+  - {material: MELON_SLICE, price: 2, sell-price: 0.5, amount: 32}
+  - {material: CACTUS, price: 4, sell-price: 1, amount: 32}
+  - {material: BAMBOO, price: 2, sell-price: 0.3, amount: 32}
+  - {material: NETHER_WART, price: 10, sell-price: 2, amount: 16}
+  - {material: COCOA_BEANS, price: 6, sell-price: 1, amount: 16}
+  - {material: BONE_MEAL, price: 3, sell-price: 0.5, amount: 32}

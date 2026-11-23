@@ -1,0 +1,15 @@
+# One shop page. price = what one item costs, sell-price = what one pays back (0 = can't sell).
+# amount = how many the buy menu starts at. dynamic-pricing: each item bought raises the price by
+# price-change, each one sold lowers it, kept between min-price and max-price (0 = no limit).
+gui-name: "&6Food"
+rows: 2
+items:
+  - {material: BREAD, price: 6, sell-price: 1, amount: 16}
+  - {material: COOKED_BEEF, price: 12, sell-price: 2, amount: 16}
+  - {material: COOKED_PORKCHOP, price: 12, sell-price: 2, amount: 16}
+  - {material: COOKED_CHICKEN, price: 8, sell-price: 1.5, amount: 16}
+  - {material: BAKED_POTATO, price: 6, sell-price: 1, amount: 16}
+  - {material: APPLE, price: 6, sell-price: 1, amount: 16}
+  - {material: GOLDEN_CARROT, price: 40, sell-price: 6, amount: 8}
+  - {material: GOLDEN_APPLE, price: 600, sell-price: 80, amount: 1}
+  - {material: CAKE, price: 50, sell-price: 8, amount: 1}
