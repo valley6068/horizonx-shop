@@ -109,7 +109,6 @@ messages:
   given: "&aA moderator (&f{from}&a) gave you &f{amount}&a."
   pay-zero: "&cPick an amount first."
   pay-offline: "&c{player} isn't online any more."
-  held-worth: "&f{item} &7| one &6{each} &7| this {amount} &6{stack} &7| all {all} you have &6{total}"
   # The lines under an item when you hover over it (in your inventory, a chest, the sell chest).
   hover-each: "&7Worth: &6{each} &7each"
   hover-stack: "&7This stack ({amount}): &6{stack}"

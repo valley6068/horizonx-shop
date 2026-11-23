@@ -827,36 +827,6 @@ fn pay(p: &Player, to: &str, amount: f64, give: bool) {
     target.send_message(&s.msg(if give { "given" } else { "got-paid" }, &pairs));
 }
 
-// ---- What the held item is worth (action bar: no lore needed) ----
-
-/// For each player holding something the shop buys back: one item's value, the held stack's, and every one
-/// of it they carry.
-fn show_held_values() {
-    let s = shop();
-    for p in horizon_bukkit::get_online_players() {
-        let Some(held) = p.get_inventory().get_item_in_main_hand().filter(|h| h.get_amount() > 0) else { continue };
-        let mat = held.get_type().name().to_ascii_uppercase();
-        let Some(it) = s.sell_item(&mat) else { continue };
-        if !sellable(&held, &mat) {
-            continue;
-        }
-        let n = i64::from(held.get_amount());
-        let all = inv::count(&p, |st| sellable(st, &mat));
-        let line = s.msg(
-            "held-worth",
-            &[
-                ("item", pretty(&mat)),
-                ("each", money(sell_now(&s, it))),
-                ("amount", n.to_string()),
-                ("stack", money(sell_now_total(&s, it, n))),
-                ("all", all.to_string()),
-                ("total", money(sell_now_total(&s, it, all))),
-            ],
-        );
-        p.send_action_bar(&horizon_bukkit::Component(horizon_kit::item::text_component(&line)));
-    }
-}
-
 // ---- Worth on hover: lines under each item the shop buys, in the copy the client is sent ----
 //
 // The engine hands every packet going to a player to `pl_send_raw` (on that player's writer thread) and every packet
@@ -1385,8 +1355,6 @@ fn on_enable(plugin: Plugin) {
         }
         true
     });
-    // ponytail: one inventory read per online player per second; fine for a small server.
-    plugin.run_task_timer(40, 20, show_held_values);
     // Worth on hover: the engine's packet hooks (as ProtocolLib and PacketEvents use them on HorizonX).
     horizon_mod::Host.on("pl_send_raw", hover_out);
     horizon_mod::Host.on("pl_receive_raw", hover_in);
