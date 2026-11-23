@@ -1114,24 +1114,26 @@ fn refresh_hover() {
     for p in &players {
         let uuid = uuid_hex(p);
         // (slot, item, amount) of each stack with no components: the ones that get lines.
-        let plain: Vec<(usize, String, i64)> = p
-            .get_inventory()
-            .get_storage_contents()
+        // Slots 0-35 as SetPlayerInventory numbers them, and the off hand as 40.
+        let inventory = p.get_inventory();
+        let mut slots: Vec<(usize, Option<ItemStack>)> = inventory.get_storage_contents().into_iter().enumerate().collect();
+        slots.push((40, inventory.get_item_in_off_hand()));
+        let plain: Vec<(usize, String, i64)> = slots
             .iter()
-            .enumerate()
             .filter_map(|(slot, st)| {
                 let st = st.as_ref()?;
                 let json = st.to_json();
                 json["components"].as_object().is_some_and(|c| c.is_empty()).then_some(())?;
-                Some((slot, json["item"].as_str()?.to_owned(), i64::from(st.get_amount())))
+                Some((*slot, json["item"].as_str()?.to_owned(), i64::from(st.get_amount())))
             })
             .collect();
         let mut carried: HashMap<String, i64> = HashMap::new();
-        for (_, item, n) in &plain {
+        // What the shop can buy from them: the storage slots (as selling counts), not the off hand.
+        for (_, item, n) in plain.iter().filter(|(slot, _, _)| *slot < 36) {
             *carried.entry(item.clone()).or_default() += n;
         }
         let shown: Vec<(usize, Vec<String>)> =
-            plain.iter().filter_map(|(slot, item, n)| Some((*slot, worth_lines(&s, item, *n, carried[item])?))).collect();
+            plain.iter().filter_map(|(slot, item, n)| Some((*slot, worth_lines(&s, item, *n, carried.get(item).copied().unwrap_or(0))?))).collect();
         CARRIED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(uuid.clone(), carried.clone());
         let touched = TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).as_mut().is_some_and(|t| t.remove(&uuid));
         {
