@@ -56,9 +56,16 @@ main-menu:
     sell:
       slot: 22
       material: CHEST
-      name: "&6Sell items"
+      name: "&6Sell items &7(put items in, then close)"
       lore: ["&7Put items in, press the green", "&7button or close it to get paid"]
       action: sell
+    worth:
+      slot: 23
+      material: GOLD_NUGGET
+      name: "&eWhat is my item worth? &7(hold it, click)"
+      lore: ["&7Shows in chat what the item", "&7in your hand sells for"]
+      action: command
+      command: worth
     close:
       slot: 31
       material: BARRIER
@@ -88,6 +95,10 @@ messages:
   no-money: "&cYou need &f{price}&c, you have &f{balance}&c."
   no-room: "&cNot enough room in your inventory for {amount}x {item}."
   no-items: "&cYou don't have any {item} to sell."
+  worthless: "&c{item} is worth nothing right now (the market crashed). Your items were kept."
+  cant-buy: "&cThe shop doesn't sell {item}."
+  cant-sell: "&cThe shop doesn't buy {item}."
+  price-changed: "&eThe price just changed to &f{price}&e. Look again and click once more."
   no-economy: "&cThe shop needs Essentials money, and it isn't running."
   reloaded: "&aShop reloaded: {shops} shops, {items} items."
   worth: "&f{item}&7: sells for &6{sell} &7each (&6{stack} &7for your {amount}), buys for &a{buy} &7each."

@@ -228,6 +228,22 @@ pub fn trade_price(it: &ShopItem, net: i64) -> f64 {
     p.max(0.0)
 }
 
+/// What `n` items cost bought at once: each one raises the next one's price, so a big buy pays its own rise.
+pub fn buy_total(it: &ShopItem, net: i64, n: i64, value: f64, rules: &MarketRules) -> f64 {
+    if !it.dynamic_pricing {
+        return buy_unit(it, net, value, rules) * n as f64;
+    }
+    (0..n).map(|k| buy_unit(it, net + k, value, rules)).sum()
+}
+
+/// What `n` items pay sold at once: each one lowers the next one's price.
+pub fn sell_total(it: &ShopItem, net: i64, n: i64, value: f64, rules: &MarketRules) -> f64 {
+    if !it.dynamic_pricing {
+        return sell_unit(it, net, value, rules) * n as f64;
+    }
+    (0..n).map(|k| sell_unit(it, net - k, value, rules)).sum()
+}
+
 /// One item's buy price now: after trades, times the market value (never below `min-buy` of normal).
 pub fn buy_unit(it: &ShopItem, net: i64, value: f64, rules: &MarketRules) -> f64 {
     let v = if rules.enabled { value.max(rules.min_buy) } else { 1.0 };
@@ -303,6 +319,12 @@ impl Rng {
 pub struct State {
     pub market: BTreeMap<String, (f64, f64)>,
     pub trades: BTreeMap<String, i64>,
+    /// When the market last moved (Unix seconds), so restarts don't reset its clock.
+    pub last_move: u64,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -354,6 +376,37 @@ fn buy_now(s: &Shop, it: &ShopItem) -> f64 {
 
 fn sell_now(s: &Shop, it: &ShopItem) -> f64 {
     sell_unit(it, net(&it.material), value(&it.material).0, &s.settings.market)
+}
+
+fn buy_now_total(s: &Shop, it: &ShopItem, n: i64) -> f64 {
+    buy_total(it, net(&it.material), n, value(&it.material).0, &s.settings.market)
+}
+
+fn sell_now_total(s: &Shop, it: &ShopItem, n: i64) -> f64 {
+    sell_total(it, net(&it.material), n, value(&it.material).0, &s.settings.market)
+}
+
+/// A stack the shop buys back: plain (no name, lore, enchantments) and not worn down.
+fn sellable(st: &ItemStack, material: &str) -> bool {
+    inv::plain(st, material) && st.get_component("minecraft:damage").and_then(|d| d.as_i64()).unwrap_or(0) == 0
+}
+
+/// Called every minute: moves the market once its interval has passed since the last move (restarts included).
+fn market_clock() {
+    let every = shop().settings.market.interval_minutes * 60;
+    let due = with_state(|st| {
+        let now = now_secs();
+        if st.last_move == 0 {
+            st.last_move = now;
+            false
+        } else {
+            now.saturating_sub(st.last_move) >= every
+        }
+    });
+    if due {
+        with_state(|st| st.last_move = now_secs());
+        market_tick();
+    }
 }
 
 /// `▲ +12%` / `▼ -40%` / `= 0%`: the last market move.
@@ -505,7 +558,7 @@ fn open_main(p: &Player) {
     m.open(p);
 }
 
-/// An item's icon in a shop page: the price in its name too, so it shows even without the lore.
+/// An item's icon in a shop page: price and market move in its name too, so they show even without the lore.
 fn item_icon(s: &Shop, it: &ShopItem) -> ItemStack {
     let (buy, sell) = (buy_now(s, it), sell_now(s, it));
     let mut name = it.title();
@@ -515,12 +568,15 @@ fn item_icon(s: &Shop, it: &ShopItem) -> ItemStack {
     if it.sell_price > 0.0 {
         name.push_str(&format!(" &8| &6Sell {}", money(sell)));
     }
+    if s.settings.market.enabled {
+        name.push_str(&format!(" &8| {}", trend(&it.material)));
+    }
     let mut lore: Vec<String> = it.lore.clone();
     if it.price > 0.0 {
-        lore.push(format!("&7Buy: &a{} &7each, &a{} &7for 64", money(buy), money(buy * 64.0)));
+        lore.push(format!("&7Buy: &a{} &7each, &a{} &7for 64", money(buy), money(buy_now_total(s, it, 64))));
     }
     if it.sell_price > 0.0 {
-        lore.push(format!("&7Sell: &6{} &7each, &6{} &7for 64", money(sell), money(sell * 64.0)));
+        lore.push(format!("&7Sell: &6{} &7each, &6{} &7for 64", money(sell), money(sell_now_total(s, it, 64))));
     }
     if s.settings.market.enabled {
         lore.push(format!("&7Market: {}", trend(&it.material)));
@@ -561,8 +617,10 @@ fn open_page(p: &Player, si: usize, page: usize) {
     if page + 1 < pages {
         m.button(b + 5, gui::icon("PAPER", &format!("&ePage {}", page + 2), &[]), move |ctx| open_page(&ctx.player, si, page + 1));
     }
+    // How to use it, in a name (names always show).
+    m.item(b + 8, gui::icon("BOOK", "&eLeft-click: buy &8| &6Right-click: sell", &[]));
     for slot in b..b + 9 {
-        if ![b, b + 3, b + 4, b + 5].contains(&slot) {
+        if ![b, b + 3, b + 4, b + 5, b + 8].contains(&slot) {
             m.item(slot, gui::filler(FILLER));
         }
     }
@@ -575,29 +633,56 @@ enum Trade {
     Sell,
 }
 
+/// Most of an item one player can buy now: what fits, what they can pay for, and the menu's cap.
+fn most_affordable(s: &Shop, it: &ShopItem, p: &Player) -> i64 {
+    let cap = inv::room_for(p, &it.material).min(s.settings.max_amount);
+    let money = economy::balance(p.get_name());
+    let (mut lo, mut hi) = (0i64, cap.max(0));
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if buy_now_total(s, it, mid) <= money + 1e-9 { lo = mid } else { hi = mid - 1 }
+    }
+    lo
+}
+
 /// The buy or sell menu for one item. `amount` 0 = start at the item's `amount`.
 fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_page: usize) {
     let s = shop();
     let Some(it) = s.item(si, ii).cloned() else { return open_main(p) };
     let mat = it.material.clone();
-    let have = inv::count(p, |st| inv::plain(st, &mat));
+    let have = inv::count(p, |st| sellable(st, &mat));
     let (unit, max) = match trade {
         Trade::Buy if it.price > 0.0 => (buy_now(&s, &it), s.settings.max_amount),
         Trade::Sell if it.sell_price > 0.0 => (sell_now(&s, &it), have.min(s.settings.max_amount)),
-        _ => return open_page(p, si, back_page),
+        Trade::Buy => {
+            p.send_message(&s.msg("cant-buy", &[("item", pretty(&mat))]));
+            return open_page(p, si, back_page);
+        }
+        Trade::Sell => {
+            p.send_message(&s.msg("cant-sell", &[("item", pretty(&mat))]));
+            return open_page(p, si, back_page);
+        }
     };
+    if trade == Trade::Sell && unit <= 0.0 {
+        p.send_message(&s.msg("worthless", &[("item", pretty(&mat))]));
+        return open_page(p, si, back_page);
+    }
     if trade == Trade::Sell && have == 0 {
         p.send_message(&s.msg("no-items", &[("item", pretty(&mat))]));
         return open_page(p, si, back_page);
     }
     let amount = if amount <= 0 { it.amount } else { amount }.clamp(1, max.max(1));
-    let total = unit * amount as f64;
+    let total = match trade {
+        Trade::Buy => buy_now_total(&s, &it, amount),
+        Trade::Sell => sell_now_total(&s, &it, amount),
+    };
     let verb = if trade == Trade::Buy { "Buy" } else { "Sell" };
-    let mut m = Menu::new(6, &format!("&8{verb} {} &7| &a{}", pretty(&mat), balance(p)));
+    let extra = if trade == Trade::Sell { format!(" &7| you have {have}") } else { String::new() };
+    let mut m = Menu::new(6, &format!("&8{verb} {} &7| &a{}{extra}", pretty(&mat), balance(p)));
     m.tag("donutshop:trade");
 
     let mut shown = ItemStack::new(Material::get_material(&mat).unwrap_or_else(|| Material::of("STONE")), amount.clamp(1, 64) as i32);
-    horizon_kit::item::name(&mut shown, &format!("&f{amount}x {} &8| &a{}", pretty(&mat), money(total)));
+    horizon_kit::item::name(&mut shown, &format!("&f{amount}x {} &8| &a{} &7({} each)", pretty(&mat), money(total), money(unit)));
     let mut lore = vec![format!("&7Each: &f{}", money(unit)), format!("&7Total: &a{}", money(total))];
     if trade == Trade::Sell {
         lore.push(format!("&7You have: &f{have}"));
@@ -618,19 +703,30 @@ fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_
         };
         m.button(slot, gui::icon(mat, &label, &[]), move |ctx| open_trade(&ctx.player, si, ii, trade, next, back_page));
     }
+    if trade == Trade::Buy {
+        let most = most_affordable(&s, &it, p);
+        if most > 0 {
+            m.button(31, gui::icon("GOLD_INGOT", &format!("&6Max: {most} &7(what you can pay for and carry)"), &[]), move |ctx| {
+                open_trade(&ctx.player, si, ii, trade, most, back_page)
+            });
+        } else {
+            m.item(31, gui::icon("BARRIER", "&cYou can't pay for or carry even 1", &[]));
+        }
+    }
     let (confirm, back, cancel) = if trade == Trade::Buy { (39, 40, 41) } else { (48, 49, 50) };
     let label = format!("&a{verb} {amount} for {}", money(total));
     m.button(confirm, gui::icon("LIME_STAINED_GLASS", &label, &[]), move |ctx| {
         match trade {
-            Trade::Buy => buy(&ctx.player, si, ii, amount),
-            Trade::Sell => sell(&ctx.player, si, ii, amount),
+            Trade::Buy => buy(&ctx.player, si, ii, amount, total),
+            Trade::Sell => sell(&ctx.player, si, ii, amount, total),
         }
         open_trade(&ctx.player, si, ii, trade, amount, back_page);
     });
     if trade == Trade::Sell {
-        let all = format!("&6Sell all {have} for {}", money(unit * have as f64));
+        let all_total = sell_now_total(&s, &it, have);
+        let all = format!("&6Sell all {have} for {}", money(all_total));
         m.button(40, gui::icon("GOLD_BLOCK", &all, &[]), move |ctx| {
-            sell(&ctx.player, si, ii, i64::MAX);
+            sell(&ctx.player, si, ii, have, all_total);
             open_page(&ctx.player, si, back_page);
         });
     }
@@ -648,14 +744,18 @@ fn open_sell_chest(p: &Player) {
     let mut m = Menu::new(6, &format!("{} &7| &a{}", s.settings.sell_title, balance(p)));
     m.tag("donutshop:sell");
     m.allow_take(true);
-    m.button(SELL_BUTTON, gui::icon("LIME_STAINED_GLASS", "&aSell everything in here", &["&7Or just close the chest"]), |ctx| ctx.player.close_inventory());
+    m.button(SELL_BUTTON, gui::icon("LIME_STAINED_GLASS", "&aSell everything in here &7(or just close it)", &[]), |ctx| ctx.player.close_inventory());
     m.on_close_items(|player, items| sell_chest(player, items));
     m.open(p);
 }
 
 // ---- Buying and selling ----
 
-fn buy(p: &Player, si: usize, ii: usize, amount: i64) {
+/// Prices can move while a menu is open (market tick, other players): a total off by more than a cent from
+/// what the button showed is refused, and the menu reopens with the new one.
+const CENT: f64 = 0.005;
+
+fn buy(p: &Player, si: usize, ii: usize, amount: i64, shown: f64) {
     let s = shop();
     let Some(it) = s.item(si, ii).cloned() else { return };
     let name = pretty(&it.material);
@@ -665,8 +765,10 @@ fn buy(p: &Player, si: usize, ii: usize, amount: i64) {
     if inv::room_for(p, &it.material) < amount {
         return p.send_message(&s.msg("no-room", &[("amount", amount.to_string()), ("item", name)]));
     }
-    // ponytail: the whole amount goes at today's unit price; the next buy sees the raised one.
-    let total = buy_now(&s, &it) * amount as f64;
+    let total = buy_now_total(&s, &it, amount);
+    if total > shown + CENT {
+        return p.send_message(&s.msg("price-changed", &[("price", money(total))]));
+    }
     if !economy::withdraw(p.get_name(), total) {
         return p.send_message(&s.msg("no-money", &[("price", money(total)), ("balance", balance(p))]));
     }
@@ -675,44 +777,54 @@ fn buy(p: &Player, si: usize, ii: usize, amount: i64) {
     p.send_message(&s.msg("bought", &[("amount", amount.to_string()), ("item", name), ("price", money(total))]));
 }
 
-fn sell(p: &Player, si: usize, ii: usize, amount: i64) {
+fn sell(p: &Player, si: usize, ii: usize, amount: i64, shown: f64) {
     let s = shop();
     let Some(it) = s.item(si, ii).cloned() else { return };
     if !economy::enabled() {
         return p.send_message(&s.msg("no-economy", &[]));
     }
-    let each = sell_now(&s, &it);
+    // A crashed item pays nothing: keep the player's items instead of taking them for $0.
+    if sell_now(&s, &it) <= 0.0 {
+        return p.send_message(&s.msg("worthless", &[("item", pretty(&it.material))]));
+    }
     let mat = it.material.clone();
-    let (n, _) = inv::take(p, |st| inv::plain(st, &mat), amount.max(1));
+    let have = inv::count(p, |st| sellable(st, &mat));
+    let n = amount.clamp(0, have);
     if n == 0 {
         return p.send_message(&s.msg("no-items", &[("item", pretty(&mat))]));
     }
-    let pay = each * n as f64;
-    if pay > 0.0 {
-        economy::deposit(p.get_name(), pay);
+    let pay = sell_now_total(&s, &it, n);
+    if n == amount && pay + CENT < shown {
+        return p.send_message(&s.msg("price-changed", &[("price", money(pay))]));
+    }
+    let (n, taken) = inv::take(p, |st| sellable(st, &mat), n);
+    let pay = sell_now_total(&s, &it, n);
+    if !economy::deposit(p.get_name(), pay) {
+        for st in &taken {
+            inv::give(p, st);
+        }
+        return p.send_message(&s.msg("no-economy", &[]));
     }
     traded(&mat, -n);
     p.send_message(&s.msg("sold", &[("amount", n.to_string()), ("price", money(pay))]));
 }
 
-/// The sell chest closed: plain items with a sell price are paid for, everything else goes back.
+/// The sell chest closed: plain, undamaged items with a sell price are paid for, everything else goes back.
 fn sell_chest(p: &Player, items: Vec<Option<ItemStack>>) {
     let s = shop();
     let eco = economy::enabled();
-    let (mut count, mut pay) = (0i64, 0.0f64);
-    let mut sold: BTreeMap<String, i64> = BTreeMap::new();
+    let mut sold: BTreeMap<String, (i64, Vec<ItemStack>)> = BTreeMap::new();
     for (slot, st) in items.into_iter().enumerate() {
         let Some(st) = st else { continue };
         if slot == SELL_BUTTON {
             continue;
         }
         let mat = st.get_type().name().to_ascii_uppercase();
-        let price = if eco { s.sell_item(&mat).map_or(0.0, |i| sell_now(&s, i)) } else { 0.0 };
-        if price > 0.0 && inv::plain(&st, &mat) {
-            let n = i64::from(st.get_amount());
-            count += n;
-            pay += price * n as f64;
-            *sold.entry(mat).or_insert(0) += n;
+        let pays = eco && s.sell_item(&mat).is_some_and(|i| sell_now(&s, i) > 0.0);
+        if pays && sellable(&st, &mat) {
+            let e = sold.entry(mat).or_default();
+            e.0 += i64::from(st.get_amount());
+            e.1.push(st);
         } else {
             inv::give(p, &st);
         }
@@ -720,12 +832,21 @@ fn sell_chest(p: &Player, items: Vec<Option<ItemStack>>) {
     if !eco {
         return p.send_message(&s.msg("no-economy", &[]));
     }
-    if count == 0 {
+    if sold.is_empty() {
         return p.send_message(&s.msg("sold-none", &[]));
     }
-    economy::deposit(p.get_name(), pay);
+    let pay: f64 = sold.iter().filter_map(|(m, (n, _))| s.sell_item(m).map(|i| sell_now_total(&s, i, *n))).sum();
+    let count: i64 = sold.values().map(|(n, _)| n).sum();
+    if !economy::deposit(p.get_name(), pay) {
+        for (_, stacks) in sold.values() {
+            for st in stacks {
+                inv::give(p, st);
+            }
+        }
+        return p.send_message(&s.msg("no-economy", &[]));
+    }
     with_state(|st| {
-        for (m, n) in &sold {
+        for (m, (n, _)) in &sold {
             *st.trades.entry(m.clone()).or_insert(0) -= n;
         }
     });
@@ -813,8 +934,8 @@ fn on_enable(plugin: Plugin) {
     });
     // The economy shows up once Essentials is enabled; ask again then.
     app::later(40, || horizon_kit::hooks::refresh());
-    let period = s.settings.market.interval_minutes * 60 * 20;
-    plugin.run_task_timer(period, period, market_tick);
+    // Checked every minute against the saved time of the last move, so restarts don't reset the market's clock.
+    plugin.run_task_timer(1200, 1200, market_clock);
     put_pause_button();
     let items: usize = s.pages.iter().map(|(_, p)| p.items.len()).sum();
     plugin.info(&format!("DonutShop (Rust, after Genius Shop) ready: {} shops, {items} items", s.pages.len()));
@@ -906,8 +1027,16 @@ mod tests {
         assert!(trade_price(diamond, -100) < trade_price(diamond, 0));
         assert_eq!(trade_price(diamond, 1_000_000), diamond.max_price);
         assert_eq!(trade_price(diamond, -1_000_000), diamond.min_price);
+        // A big buy pays its own price rise; a big sale gets its own price drop; a buy-then-sell at once loses.
+        let one = buy_unit(diamond, 0, 1.0, r);
+        assert!(buy_total(diamond, 0, 64, 1.0, r) > one * 64.0);
+        assert!(sell_total(diamond, 64, 64, 1.0, r) < sell_unit(diamond, 64, 1.0, r) * 64.0);
+        for n in [1, 64, 2304] {
+            assert!(sell_total(diamond, n, n, 1.0, r) < buy_total(diamond, 0, n, 1.0, r), "buying then selling {n} pays");
+        }
         // Without dynamic pricing, trades change nothing.
         let dirt = s.sell_item("DIRT").unwrap();
+        assert!((buy_total(dirt, 0, 64, 1.0, r) - dirt.price * 64.0).abs() < 1e-9);
         assert_eq!(trade_price(dirt, 5000), dirt.price);
         // Market: a crashed item still costs min-buy to buy, and sells for nothing.
         assert!((buy_unit(dirt, 0, 0.0, r) - dirt.price * r.min_buy).abs() < 1e-9);
