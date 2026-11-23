@@ -43,6 +43,20 @@
     },
     {
       "label": {
+        "text": "Pay a player",
+        "color": "#7dd3fc"
+      },
+      "tooltip": {
+        "text": "Send money to someone online"
+      },
+      "width": 150,
+      "action": {
+        "type": "run_command",
+        "command": "shop pay"
+      }
+    },
+    {
+      "label": {
         "text": "Home",
         "color": "#7dd3fc"
       },
