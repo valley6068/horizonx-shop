@@ -857,6 +857,341 @@ fn show_held_values() {
     }
 }
 
+// ---- Worth on hover: lines under each item the shop buys, in the copy the client is sent ----
+//
+// The engine hands every packet going to a player to `pl_send_raw` (on that player's writer thread) and every packet
+// coming from one to `pl_receive_raw` (on the game thread), as bytes we may replace. Going out, plain items the shop
+// buys get worth lines (lore) in the slot packets; the server's items never change, so selling, stacking and other
+// plugins see them as before. Coming in, a creative client's copy has the lines taken off before the server keeps it,
+// and a click's slots are marked as unknown so the server sends them again, with fresh lines. Each second the
+// player's own slots are sent again when what they'd say changed (a pickup, a market move, a trade).
+//
+// ponytail: listening makes the engine copy every small packet to hex for the listeners (~20 us each, mostly the
+// Java layer's); fine for a small server. Packets over 4 KB (a chest of shulker boxes) pass without lines.
+
+use horizon_bukkit::horizon_mod::{self, Answer, Value};
+use horizon_protocol::buf::{Reader, Writer};
+use horizon_protocol::item::{Component, Stack, WirePatch, component};
+use horizon_protocol::packets::play::{Clientbound, Serverbound, SetPlayerInventory};
+use horizon_world::nbt::Tag;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
+
+/// On each line we add, so we know ours again.
+const MARK: &str = "horizonshop:worth";
+
+/// Item names by network id (`minecraft:dirt`), from the engine.
+static ITEM_NAMES: OnceLock<Vec<String>> = OnceLock::new();
+/// The network ids of the packets that carry a player's stacks: content, slot, cursor, player inventory.
+static SLOT_PACKETS: OnceLock<[i32; 4]> = OnceLock::new();
+/// Per player (32 hex digits): how many of each item they carry, as of the last second.
+static CARRIED: Mutex<Option<HashMap<String, HashMap<String, i64>>>> = Mutex::new(None);
+/// Per player: the lines their slots were last sent with, and who got lines from a packet since.
+static SHOWN: Mutex<Option<HashMap<String, Vec<(usize, Vec<String>)>>>> = Mutex::new(None);
+static TOUCHED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WORKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `$1,234.50`. Made here, not by Essentials: the packet hook runs off the game thread, where it can't be asked.
+fn cash(v: f64) -> String {
+    let cents = (v.max(0.0) * 100.0).round() as u64;
+    let digits = (cents / 100).to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    format!("${out}.{:02}", cents % 100)
+}
+
+/// The hover lines for `n` of an item (`minecraft:dirt`) when the player carries `all` of it; None if the shop
+/// doesn't buy it.
+fn worth_lines(s: &Shop, item: &str, n: i64, all: i64) -> Option<Vec<String>> {
+    let mat = item.trim_start_matches("minecraft:").to_ascii_uppercase();
+    let it = s.sell_item(&mat)?;
+    let mut lines = vec![s.msg("hover-each", &[("each", cash(sell_now(s, it)))])];
+    if n > 1 {
+        lines.push(s.msg("hover-stack", &[("amount", n.to_string()), ("stack", cash(sell_now_total(s, it, n)))]));
+    }
+    if all > 0 && all != n {
+        lines.push(s.msg("hover-all", &[("all", all.to_string()), ("total", cash(sell_now_total(s, it, all)))]));
+    }
+    Some(lines)
+}
+
+/// The lines as the game's lore: each a text component that isn't italic, marked as ours.
+fn lore_tag(lines: &[String]) -> Option<Tag> {
+    let comps: Vec<Value> = lines
+        .iter()
+        .map(|l| {
+            let c = horizon_kit::item::text_component(l);
+            let extra = match c {
+                Value::Array(parts) => parts,
+                Value::String(text) => vec![serde_json::json!({ "text": text })],
+                other => vec![other],
+            };
+            serde_json::json!({ "text": "", "italic": false, "insertion": MARK, "extra": extra })
+        })
+        .collect();
+    horizon_world::nbt::parse_snbt(&horizon_bukkit::data::snbt(&Value::Array(comps))).ok().map(|(t, _)| t)
+}
+
+/// Adds worth lines to a stack with no components of its own (so no name, lore, enchantments or wear: what the
+/// shop buys back). True when it did.
+fn add_worth(s: &Shop, st: &mut Stack, names: &[String], carried: &HashMap<String, i64>) -> bool {
+    if !st.added.is_empty() || !st.removed.is_empty() {
+        return false;
+    }
+    let Some(item) = usize::try_from(st.item).ok().and_then(|i| names.get(i)) else { return false };
+    let n = i64::from(st.count);
+    let Some(lines) = worth_lines(s, item, n, carried.get(item).copied().unwrap_or(0)) else { return false };
+    let Some(Tag::List(lore)) = lore_tag(&lines) else { return false };
+    st.added.push((component::LORE, Component::Lore(lore)));
+    st.wire = WirePatch::default();
+    true
+}
+
+/// Takes our lines off a stack; true if there were any.
+fn strip_worth(st: &mut Stack) -> bool {
+    let ours = |line: &Tag| matches!(line.get("insertion"), Some(Tag::String(s)) if s.to_string_lossy() == MARK);
+    let mut changed = false;
+    for (kind, c) in &mut st.added {
+        if *kind == component::LORE
+            && let Component::Lore(lines) = c
+            && lines.iter().any(ours)
+        {
+            lines.retain(|l| !ours(l));
+            changed = true;
+        }
+    }
+    if changed {
+        st.added.retain(|(kind, c)| !(*kind == component::LORE && matches!(c, Component::Lore(l) if l.is_empty())));
+        st.wire = WirePatch::default();
+    }
+    changed
+}
+
+/// A packet's id from the start of its hex, without reading the rest.
+fn hex_id(hex: &str) -> Option<i32> {
+    let mut id = 0i32;
+    for i in 0..5 {
+        let b = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        id |= i32::from(b & 0x7F) << (7 * i);
+        if b & 0x80 == 0 {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn unhex(hex: &str) -> Option<Vec<u8>> {
+    (0..hex.len() / 2).map(|i| u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()).collect()
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A slot packet going to a player, with worth lines on its plain items; None to send it as it was. A packet our
+/// codec wouldn't write back byte for byte is left alone.
+pub fn rewrite_out(body: &[u8], ids: &[i32; 4], names: &[String], carried: &HashMap<String, i64>) -> Option<Vec<u8>> {
+    let mut r = Reader::new(body);
+    let id = r.varint().ok()?;
+    if !ids.contains(&id) {
+        return None;
+    }
+    let mut packet = Clientbound::decode(id, r.rest()).ok()?;
+    if packet.encode() != body {
+        return None;
+    }
+    let s = shop();
+    let mut changed = false;
+    let mut add = |st: &mut Option<Stack>| {
+        if let Some(st) = st {
+            changed |= add_worth(&s, st, names, carried);
+        }
+    };
+    match &mut packet {
+        Clientbound::ContainerSetContent(p) => {
+            p.items.iter_mut().for_each(&mut add);
+            add(&mut p.carried);
+        }
+        Clientbound::ContainerSetSlot(p) => add(&mut p.item),
+        Clientbound::SetCursorItem(p) => add(&mut p.item),
+        Clientbound::SetPlayerInventory(p) => add(&mut p.item),
+        _ => return None,
+    }
+    changed.then(|| packet.encode())
+}
+
+/// A packet from a player: a creative slot loses our lines, and a click says it doesn't know its slots, so the
+/// server sends them back (with lines that fit the new amounts). None to keep it as it was.
+pub fn rewrite_in(body: &[u8]) -> Option<Vec<u8>> {
+    use horizon_protocol::ids::play::serverbound as ids;
+    let mut r = Reader::new(body);
+    let id = r.varint().ok()?;
+    if id != ids::SET_CREATIVE_MODE_SLOT && id != ids::CONTAINER_CLICK {
+        return None;
+    }
+    let mut packet = Serverbound::decode(id, r.rest()).ok()?;
+    if packet.encode() != body {
+        return None;
+    }
+    let changed = match &mut packet {
+        Serverbound::SetCreativeModeSlot(p) => p.item.as_mut().is_some_and(strip_worth),
+        Serverbound::ContainerClick(p) => {
+            let mut any = false;
+            for h in p.changed.iter_mut().filter_map(|(_, h)| h.as_mut()).chain(p.carried.as_mut()) {
+                h.count = -1;
+                any = true;
+            }
+            any
+        }
+        _ => false,
+    };
+    changed.then(|| packet.encode())
+}
+
+fn uuid_hex(p: &Player) -> String {
+    p.get_unique_id().replace('-', "").to_ascii_lowercase()
+}
+
+fn hover_out(event: &Value) -> Answer {
+    let (Some(ids), Some(names)) = (SLOT_PACKETS.get(), ITEM_NAMES.get()) else { return Answer::Pass };
+    let (Some(hex), Some(uuid)) = (event["body"].as_str(), event["uuid"].as_str()) else { return Answer::Pass };
+    if !hex_id(hex).is_some_and(|id| ids.contains(&id)) {
+        return Answer::Pass;
+    }
+    let carried = CARRIED.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|c| c.get(uuid).cloned()).unwrap_or_default();
+    if let Some(out) = unhex(hex).and_then(|body| rewrite_out(&body, ids, names, &carried)) {
+        horizon_mod::query(serde_json::json!({ "op": "packet_edit", "field": "raw", "value": to_hex(&out) }));
+        TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(uuid.to_owned());
+        WORKING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    Answer::Pass
+}
+
+fn hover_in(event: &Value) -> Answer {
+    if ITEM_NAMES.get().is_none() {
+        return Answer::Pass;
+    }
+    let Some(hex) = event["body"].as_str() else { return Answer::Pass };
+    use horizon_protocol::ids::play::serverbound as ids;
+    if !hex_id(hex).is_some_and(|id| id == ids::SET_CREATIVE_MODE_SLOT || id == ids::CONTAINER_CLICK) {
+        return Answer::Pass;
+    }
+    if let Some(out) = unhex(hex).and_then(|body| rewrite_in(&body)) {
+        horizon_mod::query(serde_json::json!({ "op": "packet_edit", "field": "raw", "value": to_hex(&out) }));
+    }
+    Answer::Pass
+}
+
+/// The engine's item and packet tables, once a player is on (the item table comes from the running server).
+fn hover_tables() -> bool {
+    if ITEM_NAMES.get().is_none() {
+        let names: Vec<String> = horizon_mod::query(serde_json::json!({ "op": "paper_registry", "registry": "item" }))
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        // Network ids must be the game's own (air is 0, stone 1), or dirt could show another item's price.
+        if names.first().map(String::as_str) != Some("minecraft:air") || names.get(1).map(String::as_str) != Some("minecraft:stone") {
+            return false;
+        }
+        let _ = ITEM_NAMES.set(names);
+    }
+    if SLOT_PACKETS.get().is_none() {
+        const NAMES: [&str; 4] = ["ContainerSetContent", "ContainerSetSlot", "SetCursorItem", "SetPlayerInventory"];
+        let answer = horizon_mod::query(serde_json::json!({ "op": "packet_ids", "names": NAMES }));
+        let ids: Vec<i32> = NAMES.iter().filter_map(|n| answer[*n].as_i64().map(|i| i as i32)).collect();
+        // Our packet code must number them as the engine does, or we'd read one packet as another.
+        use horizon_protocol::ids::play::clientbound as ours;
+        let mine = [ours::CONTAINER_SET_CONTENT, ours::CONTAINER_SET_SLOT, ours::SET_CURSOR_ITEM, ours::SET_PLAYER_INVENTORY];
+        if ids != mine {
+            if !ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                app::warn(&format!("Worth on hover is off: this HorizonX numbers its packets {ids:?}, the shop {mine:?}."));
+            }
+            return false;
+        }
+        let _ = SLOT_PACKETS.set(mine);
+    }
+    true
+}
+
+/// Each second: what each player carries (for "all you carry"), and their own slots sent again with fresh lines
+/// when those would read differently, or when a packet got lines since.
+fn refresh_hover() {
+    let players = horizon_bukkit::get_online_players();
+    if players.is_empty() || !hover_tables() {
+        return;
+    }
+    if WORKING.load(std::sync::atomic::Ordering::Relaxed) && !ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        app::info("Worth on hover is working: items now show what they sell for.");
+    }
+    let Some(names) = ITEM_NAMES.get() else { return };
+    let s = shop();
+    let online: HashSet<String> = players.iter().map(uuid_hex).collect();
+    for p in &players {
+        let uuid = uuid_hex(p);
+        // (slot, item, amount) of each stack with no components: the ones that get lines.
+        let plain: Vec<(usize, String, i64)> = p
+            .get_inventory()
+            .get_storage_contents()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, st)| {
+                let st = st.as_ref()?;
+                let json = st.to_json();
+                json["components"].as_object().is_some_and(|c| c.is_empty()).then_some(())?;
+                Some((slot, json["item"].as_str()?.to_owned(), i64::from(st.get_amount())))
+            })
+            .collect();
+        let mut carried: HashMap<String, i64> = HashMap::new();
+        for (_, item, n) in &plain {
+            *carried.entry(item.clone()).or_default() += n;
+        }
+        let shown: Vec<(usize, Vec<String>)> =
+            plain.iter().filter_map(|(slot, item, n)| Some((*slot, worth_lines(&s, item, *n, carried[item])?))).collect();
+        CARRIED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(uuid.clone(), carried.clone());
+        let touched = TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).as_mut().is_some_and(|t| t.remove(&uuid));
+        {
+            let mut all = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
+            let all = all.get_or_insert_with(HashMap::new);
+            if !touched && all.get(&uuid) == Some(&shown) {
+                continue;
+            }
+            all.insert(uuid.clone(), shown);
+        }
+        // Each slot again as SetPlayerInventory (no menu state to get out of step), lines already on, so the hook
+        // leaves it be.
+        let mut hex = String::new();
+        for (slot, item, n) in &plain {
+            let Some(id) = names.iter().position(|x| x == item) else { continue };
+            let mut st = Stack::new(id as i32, *n as i32);
+            if !add_worth(&s, &mut st, names, &carried) {
+                continue;
+            }
+            let body = Clientbound::SetPlayerInventory(SetPlayerInventory { slot: *slot as i32, item: Some(st) }).encode();
+            let mut w = Writer::new();
+            w.varint(body.len() as i32);
+            hex.push_str(&to_hex(&w.data));
+            hex.push_str(&to_hex(&body));
+        }
+        if !hex.is_empty() {
+            horizon_mod::query(serde_json::json!({ "op": "packets_send", "packets": [{ "raw": hex, "to": [uuid] }] }));
+        }
+    }
+    if let Some(m) = CARRIED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.retain(|k, _| online.contains(k));
+    }
+    if let Some(m) = SHOWN.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.retain(|k, _| online.contains(k));
+    }
+}
+
 /// Where the sell chest's green button sits; it's never paid for or handed out.
 const SELL_BUTTON: usize = 49;
 
@@ -1052,6 +1387,12 @@ fn on_enable(plugin: Plugin) {
     });
     // ponytail: one inventory read per online player per second; fine for a small server.
     plugin.run_task_timer(40, 20, show_held_values);
+    // Worth on hover: the engine's packet hooks (as ProtocolLib and PacketEvents use them on HorizonX).
+    horizon_mod::Host.on("pl_send_raw", hover_out);
+    horizon_mod::Host.on("pl_receive_raw", hover_in);
+    horizon_mod::query(serde_json::json!({ "op": "packet_listen", "name": "raw:out" }));
+    horizon_mod::query(serde_json::json!({ "op": "packet_listen", "name": "raw:in" }));
+    plugin.run_task_timer(40, 20, refresh_hover);
     plugin.set_executor("worth", |sender, _, _| {
         match sender.as_player() {
             Some(p) => worth(p),
@@ -1194,6 +1535,81 @@ mod tests {
         let (bad, problems) = Shop::parse(DEFAULT_CONFIG, vec![("x".into(), "items: [nope".into()), ("blocks".into(), DEFAULT_SHOPS[0].1.into())]);
         assert_eq!(bad.pages.len(), 1);
         assert_eq!(problems.len(), 1);
+    }
+
+    /// Worth on hover, through the game's own packet code: dirt in a content packet gets its lines (one, the
+    /// stack, all carried), a named stack doesn't; a creative client sending it back gets exactly the plain stack;
+    /// a click's slots come out unknown so the server sends them again.
+    #[test]
+    fn hover_lines_go_on_plain_items_and_come_off_in_creative() {
+        use horizon_protocol::ids::play::clientbound as cb;
+        use horizon_protocol::item::Hashed;
+        use horizon_protocol::packets::play::{ContainerClick, ContainerSetContent, SetCreativeModeSlot};
+        fn texts(t: &Tag, out: &mut String) {
+            match t {
+                Tag::String(s) => out.push_str(&s.to_string_lossy()),
+                Tag::Compound(_) => {
+                    for key in ["text", "extra"] {
+                        if let Some(x) = t.get(key) {
+                            texts(x, out);
+                        }
+                    }
+                }
+                Tag::List(l) => l.iter().for_each(|x| texts(x, out)),
+                _ => {}
+            }
+        }
+        assert_eq!(cash(1234.5), "$1,234.50");
+        assert_eq!(cash(0.1), "$0.10");
+        let names: Vec<String> = ["minecraft:air", "minecraft:stone", "minecraft:dirt", "minecraft:barrier"].map(String::from).to_vec();
+        let ids = [cb::CONTAINER_SET_CONTENT, cb::CONTAINER_SET_SLOT, cb::SET_CURSOR_ITEM, cb::SET_PLAYER_INVENTORY];
+        let mut named = Stack::new(2, 5);
+        named.added.push((component::CUSTOM_NAME, Component::Text(horizon_protocol::text::literal("Mine"))));
+        let packet = Clientbound::ContainerSetContent(ContainerSetContent {
+            container: 0,
+            state: 3,
+            items: vec![None, Some(Stack::new(2, 64)), Some(named.clone()), Some(Stack::new(3, 1))],
+            carried: None,
+        });
+        let carried: HashMap<String, i64> = [("minecraft:dirt".to_owned(), 128)].into();
+        let out = rewrite_out(&packet.encode(), &ids, &names, &carried).expect("dirt gets lines");
+        let mut r = Reader::new(&out);
+        let id = r.varint().unwrap();
+        let Clientbound::ContainerSetContent(p) = Clientbound::decode(id, r.rest()).unwrap() else { panic!("not content") };
+        let dirt = p.items[1].clone().unwrap();
+        let Some(Component::Lore(lines)) = dirt.component(component::LORE) else { panic!("no lore on dirt") };
+        let shown: Vec<String> = lines.iter().map(|l| { let mut s = String::new(); texts(l, &mut s); s }).collect();
+        println!("{shown:?}");
+        assert_eq!(shown, ["Worth: $0.10 each", "This stack (64): $6.40", "All you carry (128): $12.80"]);
+        assert_eq!(p.items[2], Some(named), "a named stack is left alone");
+        assert_eq!(p.items[3], Some(Stack::new(3, 1)), "the shop doesn't buy barriers");
+        // Lines already on: nothing to do (what the timer sends passes the hook as it is).
+        assert!(rewrite_out(&out, &ids, &names, &carried).is_none());
+        // A creative client sends the lined dirt back: the server gets plain dirt.
+        let creative = Serverbound::SetCreativeModeSlot(SetCreativeModeSlot { slot: 36, item: Some(dirt) });
+        let back = rewrite_in(&creative.encode()).expect("lines come off");
+        let mut r = Reader::new(&back);
+        let id = r.varint().unwrap();
+        let Serverbound::SetCreativeModeSlot(p) = Serverbound::decode(id, r.rest()).unwrap() else { panic!("not creative") };
+        assert_eq!(p.item, Some(Stack::new(2, 64)));
+        // A click: every slot it names comes out unknown.
+        let click = Serverbound::ContainerClick(ContainerClick {
+            container: 0,
+            state: 3,
+            slot: 36,
+            button: 1,
+            input: 0,
+            changed: vec![(36, Some(Hashed::of(&Stack::new(2, 32)))), (37, None)],
+            carried: Some(Hashed::of(&Stack::new(2, 32))),
+        });
+        let back = rewrite_in(&click.encode()).expect("slots marked unknown");
+        let mut r = Reader::new(&back);
+        let id = r.varint().unwrap();
+        let Serverbound::ContainerClick(p) = Serverbound::decode(id, r.rest()).unwrap() else { panic!("not a click") };
+        assert_eq!(p.changed[0].1.as_ref().map(|h| h.count), Some(-1));
+        assert_eq!(p.changed[1].1, None);
+        assert_eq!(p.carried.map(|h| h.count), Some(-1));
+        assert_eq!((p.slot, p.button, p.state), (36, 1, 3));
     }
 
     /// The game reads each item component as SNBT and silently drops one it can't read; a dropped lore is a

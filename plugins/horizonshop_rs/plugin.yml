@@ -1,5 +1,5 @@
 name: HorizonShop
-version: '2.1.0-rs'
+version: '2.2.0-rs'
 main: horizon.shop.HorizonShop
 author: HorizonX Portable (remade after Genius Shop by Andreas Jensen, MIT)
 description: A DonutSMP-style shop for Horizon, in Rust. Shop pages, buy and sell menus, sell chest, paying players, moving prices.

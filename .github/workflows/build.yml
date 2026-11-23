@@ -44,5 +44,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v2.1.0-build.${{ github.run_number }}"
+          tag="v2.2.0-build.${{ github.run_number }}"
           gh release create "$tag" out/* --prerelease --title "HorizonX Shop $tag" --notes "With HorizonX closed, put horizonshop_rs.dll in BOTH folders on the stick, replacing the old one: \`HorizonX Portable\app\plugins\` and \`HorizonX Portable\data\launcher\servers\my-server\plugins\`. Then start the server and type /shop."

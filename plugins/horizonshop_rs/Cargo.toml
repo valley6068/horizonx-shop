@@ -1,6 +1,6 @@
 [package]
 name = "horizonshop_rs"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 publish = false
 description = "A DonutSMP-style shop for HorizonX in Rust, remade after Genius Shop (MIT): shop files, buy and sell menus, sell-all chest, /worth, prices that move with trades and with the market."
@@ -13,9 +13,9 @@ horizon-bukkit = { path = "../../hx/sdk/horizon-bukkit" }
 horizon-kit = { path = "../../hx/horizonsx/plugins/horizon-kit" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-
-[dev-dependencies]
-# Only for the test that feeds our item text through the game's own SNBT reader.
+serde_json = "1"
+# Worth on hover: the game's own packet and NBT code, to add a line to the items a player is sent.
+horizon-protocol = { path = "../../hx/horizonsx/crates/horizon-protocol" }
 horizon-world = { path = "../../hx/horizonsx/crates/horizon-world" }
 
 [profile.release]
