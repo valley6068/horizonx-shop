@@ -1370,6 +1370,13 @@ fn on_enable(plugin: Plugin) {
     horizon_mod::query(serde_json::json!({ "op": "packet_listen", "name": "raw:out" }));
     horizon_mod::query(serde_json::json!({ "op": "packet_listen", "name": "raw:in" }));
     plugin.run_task_timer(40, 20, refresh_hover);
+    // Teleports said over the hotbar, where they fade, not in chat (Essentials' chat lines are blanked on the stick).
+    plugin.register_event(|e: &mut horizon_bukkit::events::PlayerTeleportEvent| {
+        if matches!(e.get_cause(), "PLUGIN" | "COMMAND") {
+            let line = shop().msg("teleporting", &[]);
+            e.get_player().send_action_bar(&horizon_bukkit::Component(horizon_kit::item::text_component(&line)));
+        }
+    });
     plugin.set_executor("worth", |sender, _, _| {
         match sender.as_player() {
             Some(p) => worth(p),

@@ -113,6 +113,8 @@ messages:
   hover-each: "&7Worth: &6{each} &7each"
   hover-stack: "&7This stack ({amount}): &6{stack}"
   hover-all: "&7All you carry ({all}): &6{total}"
+  # Above the hotbar when a plugin teleports you (home, spawn, warp, random teleport); chat stays clean.
+  teleporting: "&6Teleporting..."
   price-changed: "&eThe price just changed to &f{price}&e. Look again and click once more."
   no-economy: "&cThe shop needs Essentials money, and it isn't running."
   reloaded: "&aShop reloaded: {shops} shops, {items} items."
