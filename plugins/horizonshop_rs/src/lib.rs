@@ -1,4 +1,4 @@
-//! DonutShop for HorizonX, in Rust, remade after Genius Shop (MIT, see NOTICE.md). `/shop` opens the main menu
+//! HorizonShop for HorizonX, in Rust, remade after Genius Shop (MIT, see NOTICE.md). `/shop` opens the main menu
 //! from `config.yml`; each button opens a shop page from `shops/<key>.yml`. Left-click an item to buy it (a menu
 //! with -10/-1/+1/+10/set buttons), right-click to sell it the same way. `/sell` opens a chest that pays for
 //! what you put in. `/worth` tells what the held item is worth. Money is Essentials' (the Vault service).
@@ -520,7 +520,7 @@ fn open_main(p: &Player) {
     let s = shop();
     let mm = &s.settings.main_menu;
     let mut m = Menu::new(mm.rows, &fill_in(&mm.title, p));
-    m.tag("donutshop:main");
+    m.tag("horizonshop:main");
     let size = mm.rows * 9;
     for b in mm.items.values().filter(|b| b.slot < size) {
         let lore: Vec<String> = b.lore.iter().map(|l| fill_in(l, p)).collect();
@@ -536,6 +536,9 @@ fn open_main(p: &Player) {
             }
             Some("sell") => {
                 m.button(b.slot, icon, |ctx| open_sell_chest(&ctx.player));
+            }
+            Some("pay") => {
+                m.button(b.slot, icon, |ctx| open_pay_players(&ctx.player));
             }
             Some("close") => {
                 m.button(b.slot, icon, |ctx| ctx.player.close_inventory());
@@ -598,7 +601,7 @@ fn open_page(p: &Player, si: usize, page: usize) {
     let pages = sf.items.len().div_ceil(per).max(1);
     let page = page.min(pages - 1);
     let mut m = Menu::new(rows, &format!("{} &7| &a{}", sf.gui_name, balance(p)));
-    m.tag(&format!("donutshop:page:{si}:{page}"));
+    m.tag(&format!("horizonshop:page:{si}:{page}"));
     for (slot, (ii, it)) in sf.items.iter().enumerate().skip(page * per).take(per).enumerate() {
         m.button(slot, item_icon(&s, it), move |ctx| {
             if ctx.click.is_right() {
@@ -679,7 +682,7 @@ fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_
     let verb = if trade == Trade::Buy { "Buy" } else { "Sell" };
     let extra = if trade == Trade::Sell { format!(" &7| you have {have}") } else { String::new() };
     let mut m = Menu::new(6, &format!("&8{verb} {} &7| &a{}{extra}", pretty(&mat), balance(p)));
-    m.tag("donutshop:trade");
+    m.tag("horizonshop:trade");
 
     let mut shown = ItemStack::new(Material::get_material(&mat).unwrap_or_else(|| Material::of("STONE")), amount.clamp(1, 64) as i32);
     horizon_kit::item::name(&mut shown, &format!("&f{amount}x {} &8| &a{} &7({} each)", pretty(&mat), money(total), money(unit)));
@@ -736,13 +739,131 @@ fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_
     m.open(p);
 }
 
+// ---- Paying players ----
+
+/// Online players to pay, as heads.
+fn open_pay_players(p: &Player) {
+    let me = p.get_name().to_owned();
+    let others: Vec<String> = horizon_bukkit::get_online_players().iter().map(|o| o.get_name().to_owned()).filter(|n| *n != me).collect();
+    let mut m = Menu::new(6, &format!("&8Pay a player &7| &a{}", balance(p)));
+    m.tag("horizonshop:pay");
+    if others.is_empty() {
+        m.item(22, gui::icon("BARRIER", "&7Nobody else is online", &[]));
+    }
+    for (slot, name) in others.into_iter().take(45).enumerate() {
+        let mut head = horizon_kit::item::head(&name);
+        horizon_kit::item::name(&mut head, &format!("&f{name} &8| &eClick to pay"));
+        m.button(slot, head, move |ctx| open_pay_amount(&ctx.player, &name, 0));
+    }
+    m.button(49, gui::icon("ARROW", "&cBack", &[]), |ctx| open_main(&ctx.player));
+    m.fill(gui::filler(FILLER));
+    m.open(p);
+}
+
+/// How much to send `to`: steps, a "pay" button, and for moderators a "give from the server" button.
+fn open_pay_amount(p: &Player, to: &str, amount: i64) {
+    let have = economy::balance(p.get_name()).floor().max(0.0) as i64;
+    let amount = amount.max(0);
+    let mut m = Menu::new(6, &format!("&8Pay {to} &7| &a{}", balance(p)));
+    m.tag("horizonshop:payamount");
+    let mut shown = horizon_kit::item::head(to);
+    horizon_kit::item::name(&mut shown, &format!("&f{to} &8| &a{}", money(amount as f64)));
+    m.item(13, shown);
+    for (slot, by) in [(18, -1000), (19, -100), (20, -10), (21, -1), (23, 1), (24, 10), (25, 100), (26, 1000)] {
+        let next = (amount + by).max(0);
+        let (mat, label) = if by < 0 { ("RED_STAINED_GLASS_PANE", format!("&c{by}")) } else { ("LIME_STAINED_GLASS_PANE", format!("&a+{by}")) };
+        let to = to.to_owned();
+        m.button(slot, gui::icon(mat, &label, &[]), move |ctx| open_pay_amount(&ctx.player, &to, next));
+    }
+    {
+        let to = to.to_owned();
+        m.button(22, gui::icon("GOLD_BLOCK", &format!("&6All my money &7({})", money(have as f64)), &[]), move |ctx| open_pay_amount(&ctx.player, &to, have));
+    }
+    {
+        let to = to.to_owned();
+        m.button(39, gui::icon("LIME_STAINED_GLASS", &format!("&aPay {} to {to}", money(amount as f64)), &[]), move |ctx| {
+            pay(&ctx.player, &to, amount as f64, false);
+            open_pay_amount(&ctx.player, &to, amount);
+        });
+    }
+    if p.has_permission("horizonshop.give") {
+        let to = to.to_owned();
+        m.button(41, gui::icon("EMERALD_BLOCK", &format!("&dModerator: give {} to {to} &7(from the server)", money(amount as f64)), &[]), move |ctx| {
+            pay(&ctx.player, &to, amount as f64, true);
+            open_pay_amount(&ctx.player, &to, amount);
+        });
+    }
+    m.button(40, gui::icon("ARROW", "&cBack", &[]), |ctx| open_pay_players(&ctx.player));
+    m.fill(gui::filler(FILLER));
+    m.open(p);
+}
+
+/// Sends money: from the payer's balance, or (moderators, `give`) from nothing.
+fn pay(p: &Player, to: &str, amount: f64, give: bool) {
+    let s = shop();
+    if !economy::enabled() {
+        return p.send_message(&s.msg("no-economy", &[]));
+    }
+    if amount <= 0.0 {
+        return p.send_message(&s.msg("pay-zero", &[]));
+    }
+    let Some(target) = horizon_bukkit::get_online_players().into_iter().find(|o| o.get_name().eq_ignore_ascii_case(to)) else {
+        return p.send_message(&s.msg("pay-offline", &[("player", to.to_owned())]));
+    };
+    if give && !p.has_permission("horizonshop.give") {
+        return p.send_message("§cYou can't do that.");
+    }
+    if !give && !economy::withdraw(p.get_name(), amount) {
+        return p.send_message(&s.msg("no-money", &[("price", money(amount)), ("balance", balance(p))]));
+    }
+    if !economy::deposit(target.get_name(), amount) {
+        if !give {
+            economy::deposit(p.get_name(), amount);
+        }
+        return p.send_message(&s.msg("no-economy", &[]));
+    }
+    let pairs = [("player", target.get_name().to_owned()), ("from", p.get_name().to_owned()), ("amount", money(amount))];
+    p.send_message(&s.msg("paid", &pairs));
+    target.send_message(&s.msg(if give { "given" } else { "got-paid" }, &pairs));
+}
+
+// ---- What the held item is worth (action bar: no lore needed) ----
+
+/// For each player holding something the shop buys back: one item's value, the held stack's, and every one
+/// of it they carry.
+fn show_held_values() {
+    let s = shop();
+    for p in horizon_bukkit::get_online_players() {
+        let Some(held) = p.get_inventory().get_item_in_main_hand().filter(|h| h.get_amount() > 0) else { continue };
+        let mat = held.get_type().name().to_ascii_uppercase();
+        let Some(it) = s.sell_item(&mat) else { continue };
+        if !sellable(&held, &mat) {
+            continue;
+        }
+        let n = i64::from(held.get_amount());
+        let all = inv::count(&p, |st| sellable(st, &mat));
+        let line = s.msg(
+            "held-worth",
+            &[
+                ("item", pretty(&mat)),
+                ("each", money(sell_now(&s, it))),
+                ("amount", n.to_string()),
+                ("stack", money(sell_now_total(&s, it, n))),
+                ("all", all.to_string()),
+                ("total", money(sell_now_total(&s, it, all))),
+            ],
+        );
+        p.send_action_bar(&horizon_bukkit::Component(horizon_kit::item::text_component(&line)));
+    }
+}
+
 /// Where the sell chest's green button sits; it's never paid for or handed out.
 const SELL_BUTTON: usize = 49;
 
 fn open_sell_chest(p: &Player) {
     let s = shop();
     let mut m = Menu::new(6, &format!("{} &7| &a{}", s.settings.sell_title, balance(p)));
-    m.tag("donutshop:sell");
+    m.tag("horizonshop:sell");
     m.allow_take(true);
     m.button(SELL_BUTTON, gui::icon("LIME_STAINED_GLASS", "&aSell everything in here &7(or just close it)", &[]), |ctx| ctx.player.close_inventory());
     m.on_close_items(|player, items| sell_chest(player, items));
@@ -883,7 +1004,7 @@ fn worth(p: &Player) {
 fn shop_command(sender: &CommandSender, _label: &str, args: &[&str]) -> bool {
     match args.first().map(|a| a.to_ascii_lowercase()).as_deref() {
         Some("reload") => {
-            if !sender.has_permission("donutshop.admin") {
+            if !sender.has_permission("horizonshop.admin") {
                 sender.send_message("§cYou can't do that.");
                 return true;
             }
@@ -892,6 +1013,10 @@ fn shop_command(sender: &CommandSender, _label: &str, args: &[&str]) -> bool {
             let items: usize = s.pages.iter().map(|(_, p)| p.items.len()).sum();
             sender.send_message(&s.msg("reloaded", &[("shops", s.pages.len().to_string()), ("items", items.to_string())]));
         }
+        Some("pay") => match sender.as_player() {
+            Some(p) => open_pay_players(p),
+            None => sender.send_message("Only players can pay."),
+        },
         Some("sell") => match sender.as_player() {
             Some(p) => open_sell_chest(p),
             None => sender.send_message("Only players can sell."),
@@ -911,8 +1036,8 @@ fn on_enable(plugin: Plugin) {
     load_state();
     plugin.set_executor("shop", shop_command);
     plugin.set_tab_completer("shop", |s, _, a| {
-        let mut out = vec!["sell".to_owned()];
-        if s.has_permission("donutshop.admin") {
+        let mut out = vec!["sell".to_owned(), "pay".to_owned()];
+        if s.has_permission("horizonshop.admin") {
             out.push("reload".to_owned());
         }
         let t = a.first().map(|x| x.to_ascii_lowercase()).unwrap_or_default();
@@ -925,6 +1050,8 @@ fn on_enable(plugin: Plugin) {
         }
         true
     });
+    // ponytail: one inventory read per online player per second; fine for a small server.
+    plugin.run_task_timer(40, 20, show_held_values);
     plugin.set_executor("worth", |sender, _, _| {
         match sender.as_player() {
             Some(p) => worth(p),
@@ -938,10 +1065,10 @@ fn on_enable(plugin: Plugin) {
     plugin.run_task_timer(1200, 1200, market_clock);
     put_pause_button();
     let items: usize = s.pages.iter().map(|(_, p)| p.items.len()).sum();
-    plugin.info(&format!("DonutShop (Rust, after Genius Shop) ready: {} shops, {items} items", s.pages.len()));
+    plugin.info(&format!("HorizonShop (Rust, after Genius Shop) ready: {} shops, {items} items", s.pages.len()));
 }
 
-/// The "Donut" button in the Escape menu is a data pack (a dialog in the `pause_screen_additions` tag): written
+/// The "Menu" button in the Escape menu is a data pack (a dialog in the `pause_screen_additions` tag): written
 /// into the world's datapacks once, so it shows from the next server start. Never overwritten (edit it freely).
 fn put_pause_button() {
     let root = app::folder().parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_default();

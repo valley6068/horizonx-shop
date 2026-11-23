@@ -1,6 +1,6 @@
 [package]
-name = "donutshop_rs"
-version = "2.0.0"
+name = "horizonshop_rs"
+version = "2.1.0"
 edition = "2024"
 publish = false
 description = "A DonutSMP-style shop for HorizonX in Rust, remade after Genius Shop (MIT): shop files, buy and sell menus, sell-all chest, /worth, prices that move with trades and with the market."

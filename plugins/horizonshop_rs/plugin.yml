@@ -1,0 +1,32 @@
+name: HorizonShop
+version: '2.1.0-rs'
+main: horizon.shop.HorizonShop
+author: HorizonX Portable (remade after Genius Shop by Andreas Jensen, MIT)
+description: A DonutSMP-style shop for Horizon, in Rust. Shop pages, buy and sell menus, sell chest, paying players, moving prices.
+softdepend: [Vault, Essentials]
+api-version: 1.21.11
+
+commands:
+  shop:
+    description: Open the shop (also from the Menu button in the Escape menu).
+    usage: /shop [sell|pay|reload]
+    permission: horizonshop.use
+  sell:
+    description: Open the sell chest.
+    usage: /sell
+    permission: horizonshop.use
+  worth:
+    description: What the item in your hand is worth right now.
+    usage: /worth
+    permission: horizonshop.use
+
+permissions:
+  horizonshop.use:
+    description: Use the shop, the sell chest, paying players and /worth
+    default: true
+  horizonshop.give:
+    description: Give money to a player from nothing (moderators)
+    default: op
+  horizonshop.admin:
+    description: /shop reload
+    default: op

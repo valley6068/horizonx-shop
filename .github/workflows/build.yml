@@ -25,18 +25,18 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            plugins/donutshop_rs/target
-          key: shop-${{ hashFiles('plugins/donutshop_rs/Cargo.toml') }}
+            plugins/horizonshop_rs/target
+          key: shop-${{ hashFiles('plugins/horizonshop_rs/Cargo.toml') }}
           restore-keys: shop-
       - name: Test
-        run: cargo test --manifest-path plugins/donutshop_rs/Cargo.toml -- --nocapture
+        run: cargo test --manifest-path plugins/horizonshop_rs/Cargo.toml -- --nocapture
       - name: Build
         shell: pwsh
         run: |
-          cargo build --release --manifest-path plugins/donutshop_rs/Cargo.toml
+          cargo build --release --manifest-path plugins/horizonshop_rs/Cargo.toml
           if ($LASTEXITCODE) { exit 1 }
           New-Item -ItemType Directory -Force out | Out-Null
-          Copy-Item plugins/donutshop_rs/target/release/donutshop_rs.dll out/
+          Copy-Item plugins/horizonshop_rs/target/release/horizonshop_rs.dll out/
           Copy-Item NOTICE.md out/
           Get-ChildItem out | ForEach-Object { "{0} {1}" -f $_.Name, $_.Length }
       - name: Pre-release
@@ -44,5 +44,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v2.0.0-build.${{ github.run_number }}"
-          gh release create "$tag" out/* --prerelease --title "HorizonX Shop $tag" --notes "With HorizonX closed, put donutshop_rs.dll in BOTH folders on the stick, replacing the old one: \`HorizonX Portable\app\plugins\` and \`HorizonX Portable\data\launcher\servers\my-server\plugins\`. Then start the server and type /shop."
+          tag="v2.1.0-build.${{ github.run_number }}"
+          gh release create "$tag" out/* --prerelease --title "HorizonX Shop $tag" --notes "With HorizonX closed, put horizonshop_rs.dll in BOTH folders on the stick, replacing the old one: \`HorizonX Portable\app\plugins\` and \`HorizonX Portable\data\launcher\servers\my-server\plugins\`. Then start the server and type /shop."

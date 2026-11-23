@@ -1,4 +1,4 @@
-DonutShop (Rust) is a HorizonX remake of the design of Genius Shop (https://github.com/Drallee/Genius-Shop): one
+HorizonShop (Rust) is a HorizonX remake of the design of Genius Shop (https://github.com/Drallee/Genius-Shop): one
 YAML file per shop page, separate buy and sell menus with +/- amount buttons, a sell-all chest, and per-item
 dynamic pricing kept between a minimum and a maximum. It's written new in Rust for the HorizonX plugin kit and
 doesn't contain Genius Shop's Java code. Genius Shop's license:

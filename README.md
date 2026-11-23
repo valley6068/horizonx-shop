@@ -8,7 +8,7 @@ Prices move: items with `dynamic-pricing` get dearer with each one bought and ch
 
 ## Install
 
-Download `donutshop_rs.dll` from the latest release. With HorizonX closed, put it in the server's `plugins` folder (replace the old one), then start the server. The files it reads are in `plugins/DonutShop/`: `config.yml` (main menu, market, messages) and `shops/*.yml` (one file per shop page). Change them and run `/shop reload`.
+Download `horizonshop_rs.dll` from the latest release. With HorizonX closed, put it in the server's `plugins` folder (replace the old one), then start the server. The files it reads are in `plugins/DonutShop/`: `config.yml` (main menu, market, messages) and `shops/*.yml` (one file per shop page). Change them and run `/shop reload`.
 
 ## Build
 

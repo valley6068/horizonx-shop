@@ -1,4 +1,4 @@
-# DonutShop (Rust) for HorizonX. Money is your Essentials money.
+# HorizonShop (Rust) for HorizonX. Money is your Essentials money.
 # The shops themselves are the files in shops/ (one file = one shop page, its name = its key).
 # Change anything, then /shop reload.
 # {balance} anywhere in a name or title shows the player's money.
@@ -66,6 +66,12 @@ main-menu:
       lore: ["&7Shows in chat what the item", "&7in your hand sells for"]
       action: command
       command: worth
+    pay:
+      slot: 21
+      material: PLAYER_HEAD
+      name: "&bPay a player"
+      lore: ["&7Send money to someone online"]
+      action: pay
     close:
       slot: 31
       material: BARRIER
@@ -98,6 +104,12 @@ messages:
   worthless: "&c{item} is worth nothing right now (the market crashed). Your items were kept."
   cant-buy: "&cThe shop doesn't sell {item}."
   cant-sell: "&cThe shop doesn't buy {item}."
+  paid: "&aYou sent &f{amount} &ato &f{player}&a."
+  got-paid: "&f{from} &asent you &f{amount}&a."
+  given: "&aA moderator (&f{from}&a) gave you &f{amount}&a."
+  pay-zero: "&cPick an amount first."
+  pay-offline: "&c{player} isn't online any more."
+  held-worth: "&f{item} &7| one &6{each} &7| this {amount} &6{stack} &7| all {all} you have &6{total}"
   price-changed: "&eThe price just changed to &f{price}&e. Look again and click once more."
   no-economy: "&cThe shop needs Essentials money, and it isn't running."
   reloaded: "&aShop reloaded: {shops} shops, {items} items."

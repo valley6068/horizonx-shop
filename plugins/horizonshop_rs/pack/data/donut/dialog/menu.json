@@ -1,12 +1,12 @@
 {
   "type": "minecraft:multi_action",
   "title": {
-    "text": "Donut",
+    "text": "Menu",
     "color": "#f5a3c7",
     "bold": true
   },
   "external_title": {
-    "text": "Donut",
+    "text": "Menu",
     "color": "#f5a3c7"
   },
   "columns": 2,
