@@ -1049,8 +1049,15 @@ fn hover_in(event: &Value) -> Answer {
     }
     let Some(hex) = event["body"].as_str() else { return Answer::Pass };
     use horizon_protocol::ids::play::serverbound as ids;
-    if !hex_id(hex).is_some_and(|id| id == ids::SET_CREATIVE_MODE_SLOT || id == ids::CONTAINER_CLICK) {
+    let Some(id) = hex_id(hex).filter(|id| *id == ids::SET_CREATIVE_MODE_SLOT || *id == ids::CONTAINER_CLICK) else {
         return Answer::Pass;
+    };
+    // A creative client changes its own slots and the server sends nothing back: its new stacks have no lines
+    // until the timer sends the slots again, so it must.
+    if id == ids::SET_CREATIVE_MODE_SLOT
+        && let Some(uuid) = event["uuid"].as_str()
+    {
+        TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(uuid.to_owned());
     }
     if let Some(out) = unhex(hex).and_then(|body| rewrite_in(&body)) {
         horizon_mod::query(serde_json::json!({ "op": "packet_edit", "field": "raw", "value": to_hex(&out) }));
