@@ -115,6 +115,8 @@ messages:
   hover-all: "&7All you carry ({all}): &6{total}"
   # Above the hotbar when a plugin teleports you (home, spawn, warp, random teleport); chat stays clean.
   teleporting: "&6Teleporting..."
+  # The Menu's Balance button.
+  balance: "&7Your money: &a{balance}"
   price-changed: "&eThe price just changed to &f{price}&e. Look again and click once more."
   no-economy: "&cThe shop needs Essentials money, and it isn't running."
   reloaded: "&aShop reloaded: {shops} shops, {items} items."

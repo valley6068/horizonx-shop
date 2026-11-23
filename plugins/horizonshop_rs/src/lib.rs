@@ -30,6 +30,7 @@ const DEFAULT_SHOPS: [(&str, &str); 7] = [
     ("special", include_str!("../shops/special.yml")),
 ];
 const FILLER: &str = "GRAY_STAINED_GLASS_PANE";
+const DEFAULT_WORTH: &str = include_str!("../worth.yml");
 
 // ---- Files ----
 
@@ -137,6 +138,8 @@ pub struct Shop {
     /// (key, page) in file-name order.
     pub pages: Vec<(String, ShopFile)>,
     defaults: BTreeMap<String, String>,
+    /// worth.yml: what items not on a shop page sell for (MATERIAL -> one item; 0 = nothing).
+    pub worth: BTreeMap<String, f64>,
 }
 
 impl Shop {
@@ -173,7 +176,7 @@ impl Shop {
                 Err(e) => problems.push(format!("shops/{key}.yml: {e} (left out)")),
             }
         }
-        (Shop { settings, pages: out, defaults: default.messages }, problems)
+        (Shop { settings, pages: out, defaults: default.messages, worth: parse_worth(DEFAULT_WORTH) }, problems)
     }
 
     pub fn item(&self, si: usize, ii: usize) -> Option<&ShopItem> {
@@ -475,10 +478,15 @@ fn load() -> Arc<Shop> {
             let _ = std::fs::write(shops.join(format!("{key}.yml")), text);
         }
     }
-    let (s, problems) = Shop::parse(&std::fs::read_to_string(&config).unwrap_or_default(), read_pages(&shops));
+    let (mut s, problems) = Shop::parse(&std::fs::read_to_string(&config).unwrap_or_default(), read_pages(&shops));
     for p in problems {
         app::warn(&p);
     }
+    let worth = dir.join("worth.yml");
+    if !worth.exists() {
+        let _ = std::fs::write(&worth, DEFAULT_WORTH);
+    }
+    s.worth = parse_worth(&std::fs::read_to_string(&worth).unwrap_or_default());
     let s = Arc::new(s);
     *SHOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     s
@@ -497,8 +505,128 @@ fn read_pages(dir: &Path) -> Vec<(String, String)> {
     out
 }
 
+/// Money the short way, as DonutSMP shows it: `$0.1`, `$12.5`, `$2K`, `$5.5K`, `$800M`, `$1.2B`. Cut down, never
+/// rounded up, so it never shows more than there is. Made here (no Essentials call), so any thread can use it.
 fn money(v: f64) -> String {
-    economy::format(v)
+    let v = if v.is_finite() { v.max(0.0) } else { 0.0 };
+    if v < 1000.0 {
+        let t = format!("{:.2}", (v * 100.0 + 1e-6).floor() / 100.0);
+        return format!("${}", t.trim_end_matches('0').trim_end_matches('.'));
+    }
+    let (div, unit) = [(1e15, "Q"), (1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")].into_iter().find(|(d, _)| v >= *d).unwrap_or((1e3, "K"));
+    let n = (v / div * 10.0 + 1e-6).floor() / 10.0;
+    let t = format!("{n:.1}");
+    format!("${}{unit}", t.trim_end_matches('0').trim_end_matches('.'))
+}
+
+/// worth.yml: `MATERIAL: value` lines (case and `minecraft:` don't matter).
+fn parse_worth(text: &str) -> BTreeMap<String, f64> {
+    serde_yaml::from_str::<BTreeMap<String, f64>>(text)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k.trim_start_matches("minecraft:").to_ascii_uppercase(), v.max(0.0)))
+        .collect()
+}
+
+/// What one plain item of `mat` sells for now: its shop page (with the market), else worth.yml, else what it's made
+/// of; None for what has no value (creative-only blocks, spawn eggs).
+pub fn item_worth(s: &Shop, mat: &str) -> Option<f64> {
+    let mat = mat.trim_start_matches("minecraft:").to_ascii_uppercase();
+    worth_of(s, &mat, 0)
+}
+
+fn worth_of(s: &Shop, mat: &str, depth: u8) -> Option<f64> {
+    const NONE: [&str; 22] = [
+        "AIR", "BEDROCK", "BARRIER", "COMMAND_BLOCK", "CHAIN_COMMAND_BLOCK", "REPEATING_COMMAND_BLOCK", "COMMAND_BLOCK_MINECART",
+        "STRUCTURE_BLOCK", "STRUCTURE_VOID", "JIGSAW", "LIGHT", "DEBUG_STICK", "KNOWLEDGE_BOOK", "SPAWNER", "TRIAL_SPAWNER",
+        "END_PORTAL_FRAME", "REINFORCED_DEEPSLATE", "PETRIFIED_OAK_SLAB", "TEST_BLOCK", "TEST_INSTANCE_BLOCK", "BUDDING_AMETHYST", "FARMLAND",
+    ];
+    const COLORS: [&str; 16] = [
+        "LIGHT_BLUE_", "LIGHT_GRAY_", "WHITE_", "ORANGE_", "MAGENTA_", "YELLOW_", "LIME_", "PINK_", "GRAY_", "CYAN_", "PURPLE_", "BLUE_",
+        "BROWN_", "GREEN_", "RED_", "BLACK_",
+    ];
+    if depth > 4 || NONE.contains(&mat) || mat.ends_with("_SPAWN_EGG") {
+        return None;
+    }
+    if let Some(it) = s.sell_item(mat) {
+        return Some(sell_now(s, it));
+    }
+    if let Some(v) = s.worth.get(mat) {
+        return (*v > 0.0).then_some(*v);
+    }
+    let of = |m: &str| worth_of(s, m, depth + 1);
+    // Tools and armor: what they're made of, times how much of it.
+    const PIECES: [(&str, f64); 12] = [
+        ("_SWORD", 2.0), ("_PICKAXE", 3.0), ("_AXE", 3.0), ("_SHOVEL", 1.0), ("_HOE", 2.0), ("_SPEAR", 1.0), ("_HELMET", 5.0),
+        ("_CHESTPLATE", 8.0), ("_LEGGINGS", 7.0), ("_BOOTS", 4.0), ("_HORSE_ARMOR", 7.0), ("_NAUTILUS_ARMOR", 7.0),
+    ];
+    const TIERS: [(&str, &str); 8] = [
+        ("WOODEN", "OAK_PLANKS"), ("STONE", "COBBLESTONE"), ("LEATHER", "LEATHER"), ("CHAINMAIL", "IRON_INGOT"), ("IRON", "IRON_INGOT"),
+        ("GOLDEN", "GOLD_INGOT"), ("COPPER", "COPPER_INGOT"), ("DIAMOND", "DIAMOND"),
+    ];
+    for (piece, n) in PIECES {
+        if let Some(tier) = mat.strip_suffix(piece) {
+            if tier == "NETHERITE" {
+                return Some(of(&format!("DIAMOND{piece}"))? + of("NETHERITE_INGOT")?);
+            }
+            if let Some((_, base)) = TIERS.iter().find(|(t, _)| *t == tier) {
+                return Some(of(base)? * n);
+            }
+        }
+    }
+    // Blocks of nine, and ores by what they drop.
+    if let Some(base) = mat.strip_suffix("_BLOCK") {
+        let ingot = match base {
+            "IRON" | "GOLD" | "COPPER" | "NETHERITE" => format!("{base}_INGOT"),
+            "LAPIS" => "LAPIS_LAZULI".to_owned(),
+            "AMETHYST" => "AMETHYST_SHARD".to_owned(),
+            "COAL" | "DIAMOND" | "EMERALD" | "REDSTONE" | "RAW_IRON" | "RAW_GOLD" | "RAW_COPPER" => base.to_owned(),
+            _ => String::new(),
+        };
+        if !ingot.is_empty() {
+            let n = if base == "AMETHYST" { 4.0 } else { 9.0 };
+            return Some(of(&ingot)? * n);
+        }
+    }
+    if let Some(ore) = mat.strip_suffix("_ORE") {
+        let ore = ore.trim_start_matches("DEEPSLATE_").trim_start_matches("NETHER_");
+        let (drop, n) = match ore {
+            "COAL" => ("COAL", 1.0),
+            "IRON" => ("RAW_IRON", 1.0),
+            "GOLD" => ("RAW_GOLD", 1.0),
+            "COPPER" => ("RAW_COPPER", 3.0),
+            "DIAMOND" => ("DIAMOND", 1.0),
+            "EMERALD" => ("EMERALD", 1.0),
+            "LAPIS" => ("LAPIS_LAZULI", 6.0),
+            "REDSTONE" => ("REDSTONE", 4.0),
+            "QUARTZ" => ("QUARTZ", 1.0),
+            _ => ("", 0.0),
+        };
+        if n > 0.0 {
+            return Some(of(drop)? * n);
+        }
+    }
+    // Wood: logs as the shop's logs, planks a quarter.
+    if ["_LOG", "_WOOD", "_STEM", "_HYPHAE"].iter().any(|e| mat.ends_with(e)) {
+        return of("OAK_LOG");
+    }
+    if mat.ends_with("_PLANKS") {
+        return of("OAK_PLANKS");
+    }
+    if mat.starts_with("MUSIC_DISC_") {
+        return of("MUSIC_DISC");
+    }
+    if mat.ends_with("_SMITHING_TEMPLATE") {
+        return of("SMITHING_TEMPLATE");
+    }
+    if mat.ends_with("_POTTERY_SHERD") {
+        return of("POTTERY_SHERD");
+    }
+    // A colour of something: what the plain one is worth (RED_WOOL as WOOL).
+    if let Some(base) = COLORS.iter().find_map(|c| mat.strip_prefix(c)) {
+        return of(base);
+    }
+    s.worth.get("ANYTHING_ELSE").map_or(Some(0.1), |v| (*v > 0.0).then_some(*v))
 }
 
 fn balance(p: &Player) -> String {
@@ -655,7 +783,8 @@ fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_
     let mat = it.material.clone();
     let have = inv::count(p, |st| sellable(st, &mat));
     let (unit, max) = match trade {
-        Trade::Buy if it.price > 0.0 => (buy_now(&s, &it), s.settings.max_amount),
+        // No more than fits: a totem is one per slot, so 2 totems need 2 free slots.
+        Trade::Buy if it.price > 0.0 => (buy_now(&s, &it), s.settings.max_amount.min(inv::room_for(p, &mat)).max(1)),
         Trade::Sell if it.sell_price > 0.0 => (sell_now(&s, &it), have.min(s.settings.max_amount)),
         Trade::Buy => {
             p.send_message(&s.msg("cant-buy", &[("item", pretty(&mat))]));
@@ -684,7 +813,9 @@ fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_
     let mut m = Menu::new(6, &format!("&8{verb} {} &7| &a{}{extra}", pretty(&mat), balance(p)));
     m.tag("horizonshop:trade");
 
-    let mut shown = ItemStack::new(Material::get_material(&mat).unwrap_or_else(|| Material::of("STONE")), amount.clamp(1, 64) as i32);
+    // The picture shows no bigger a stack than the item makes (one totem, not 64 in a pile).
+    let mut shown = ItemStack::new(Material::get_material(&mat).unwrap_or_else(|| Material::of("STONE")), 1);
+    shown.set_amount(amount.clamp(1, i64::from(shown.get_max_stack_size().max(1))) as i32);
     horizon_kit::item::name(&mut shown, &format!("&f{amount}x {} &8| &a{} &7({} each)", pretty(&mat), money(total), money(unit)));
     let mut lore = vec![format!("&7Each: &f{}", money(unit)), format!("&7Total: &a{}", money(total))];
     if trade == Trade::Sell {
@@ -700,7 +831,7 @@ fn open_trade(p: &Player, si: usize, ii: usize, trade: Trade, amount: i64, back_
             _ => step(amount, n, max),
         };
         let (mat, label) = match kind {
-            "set" => ("YELLOW_STAINED_GLASS_PANE", format!("&eSet to {n}")),
+            "set" => ("YELLOW_STAINED_GLASS_PANE", format!("&eSet to {next}")),
             "-" => ("RED_STAINED_GLASS_PANE", format!("&c-{n}")),
             _ => ("LIME_STAINED_GLASS_PANE", format!("&a+{n}")),
         };
@@ -858,37 +989,52 @@ static SLOT_PACKETS: OnceLock<[i32; 4]> = OnceLock::new();
 static CARRIED: Mutex<Option<HashMap<String, HashMap<String, i64>>>> = Mutex::new(None);
 /// Per player: the lines their slots were last sent with, and who got lines from a packet since.
 static SHOWN: Mutex<Option<HashMap<String, Vec<(usize, Vec<String>)>>>> = Mutex::new(None);
-static TOUCHED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+/// Players whose slots go out again soon, with how many more times (a creative slot twice: the first pass can come
+/// before the server has the new stack).
+static TOUCHED: Mutex<Option<HashMap<String, u8>>> = Mutex::new(None);
+static PASSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn touch(uuid: &str, times: u8) {
+    let mut all = TOUCHED.lock().unwrap_or_else(|e| e.into_inner());
+    let n = all.get_or_insert_with(HashMap::new).entry(uuid.to_owned()).or_insert(0);
+    *n = (*n).max(times);
+}
 static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static WORKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// `$1,234.50`. Made here, not by Essentials: the packet hook runs off the game thread, where it can't be asked.
-fn cash(v: f64) -> String {
-    let cents = (v.max(0.0) * 100.0).round() as u64;
-    let digits = (cents / 100).to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
+/// What `n` of an item come to: a shop item's own total (its dynamic price moves with each one), else `n` times one.
+fn worth_total(s: &Shop, mat: &str, n: i64) -> Option<f64> {
+    let m = mat.trim_start_matches("minecraft:").to_ascii_uppercase();
+    match s.sell_item(&m) {
+        Some(it) => Some(sell_now_total(s, it, n)),
+        None => item_worth(s, &m).map(|v| v * n as f64),
     }
-    format!("${out}.{:02}", cents % 100)
 }
 
-/// The hover lines for `n` of an item (`minecraft:dirt`) when the player carries `all` of it; None if the shop
-/// doesn't buy it.
-fn worth_lines(s: &Shop, item: &str, n: i64, all: i64) -> Option<Vec<String>> {
-    let mat = item.trim_start_matches("minecraft:").to_ascii_uppercase();
-    let it = s.sell_item(&mat)?;
-    let mut lines = vec![s.msg("hover-each", &[("each", cash(sell_now(s, it)))])];
+/// The hover lines for `n` of an item (`minecraft:dirt`) when the player carries `all` of it, `wear` = the share
+/// of durability left (1 for a new one); None if it has no value.
+fn worth_lines(s: &Shop, item: &str, n: i64, all: i64, wear: f64) -> Option<Vec<String>> {
+    let each = item_worth(s, item)? * wear;
+    let mut lines = vec![s.msg("hover-each", &[("each", money(each))])];
     if n > 1 {
-        lines.push(s.msg("hover-stack", &[("amount", n.to_string()), ("stack", cash(sell_now_total(s, it, n)))]));
+        lines.push(s.msg("hover-stack", &[("amount", n.to_string()), ("stack", money(worth_total(s, item, n)? * wear))]));
     }
     if all > 0 && all != n {
-        lines.push(s.msg("hover-all", &[("all", all.to_string()), ("total", cash(sell_now_total(s, it, all)))]));
+        lines.push(s.msg("hover-all", &[("all", all.to_string()), ("total", money(worth_total(s, item, all)?))]));
     }
     Some(lines)
+}
+
+/// Durability by item (`minecraft:diamond_sword` -> 1561), for the gear that wears down; asked once on the game thread.
+static MAX_DAMAGE: OnceLock<HashMap<String, i64>> = OnceLock::new();
+
+/// The share of durability left for a stack with `damage` (1 for none); None when its durability isn't known.
+fn wear_of(item: &str, damage: i64) -> Option<f64> {
+    if damage <= 0 {
+        return Some(1.0);
+    }
+    let max = *MAX_DAMAGE.get()?.get(item)?;
+    (max > 0).then(|| ((max - damage) as f64 / max as f64).clamp(0.0, 1.0))
 }
 
 /// The lines as the game's lore: each a text component that isn't italic, marked as ours.
@@ -911,12 +1057,18 @@ fn lore_tag(lines: &[String]) -> Option<Tag> {
 /// Adds worth lines to a stack with no components of its own (so no name, lore, enchantments or wear: what the
 /// shop buys back). True when it did.
 fn add_worth(s: &Shop, st: &mut Stack, names: &[String], carried: &HashMap<String, i64>) -> bool {
-    if !st.added.is_empty() || !st.removed.is_empty() {
+    // Plain, worn or enchanted: anything else (a name, lore, a potion) is someone's own item and keeps its text.
+    const ALLOWED: [i32; 3] = [component::DAMAGE, component::ENCHANTMENTS, component::REPAIR_COST];
+    if !st.removed.is_empty() || st.added.iter().any(|(kind, _)| !ALLOWED.contains(kind)) {
         return false;
     }
+    let plain = st.added.is_empty();
     let Some(item) = usize::try_from(st.item).ok().and_then(|i| names.get(i)) else { return false };
+    let Some(wear) = wear_of(item, i64::from(st.damage())) else { return false };
     let n = i64::from(st.count);
-    let Some(lines) = worth_lines(s, item, n, carried.get(item).copied().unwrap_or(0)) else { return false };
+    // "All you carry" counts plain ones, so only a plain stack shows it.
+    let all = if plain { carried.get(item).copied().unwrap_or(0) } else { n };
+    let Some(lines) = worth_lines(s, item, n, all, wear) else { return false };
     let Some(Tag::List(lore)) = lore_tag(&lines) else { return false };
     st.added.push((component::LORE, Component::Lore(lore)));
     st.wire = WirePatch::default();
@@ -1037,7 +1189,7 @@ fn hover_out(event: &Value) -> Answer {
     let carried = CARRIED.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|c| c.get(uuid).cloned()).unwrap_or_default();
     if let Some(out) = unhex(hex).and_then(|body| rewrite_out(&body, ids, names, &carried)) {
         horizon_mod::query(serde_json::json!({ "op": "packet_edit", "field": "raw", "value": to_hex(&out) }));
-        TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(uuid.to_owned());
+        touch(uuid, 1);
         WORKING.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     Answer::Pass
@@ -1057,7 +1209,7 @@ fn hover_in(event: &Value) -> Answer {
     if id == ids::SET_CREATIVE_MODE_SLOT
         && let Some(uuid) = event["uuid"].as_str()
     {
-        TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(uuid.to_owned());
+        touch(uuid, 2);
     }
     if let Some(out) = unhex(hex).and_then(|body| rewrite_in(&body)) {
         horizon_mod::query(serde_json::json!({ "op": "packet_edit", "field": "raw", "value": to_hex(&out) }));
@@ -1095,6 +1247,22 @@ fn hover_tables() -> bool {
         }
         let _ = SLOT_PACKETS.set(mine);
     }
+    if MAX_DAMAGE.get().is_none() {
+        // Only gear wears down: its durability, asked once each (the game keeps these answers for the run).
+        const WEARS: [&str; 14] = ["_SWORD", "_PICKAXE", "_AXE", "_SHOVEL", "_HOE", "_SPEAR", "_HELMET", "_CHESTPLATE", "_LEGGINGS", "_BOOTS", "BOW", "_ROD", "_STICK", "_ARMOR"];
+        const OTHERS: [&str; 7] = ["minecraft:shield", "minecraft:trident", "minecraft:mace", "minecraft:elytra", "minecraft:flint_and_steel", "minecraft:shears", "minecraft:brush"];
+        let mut max = HashMap::new();
+        for name in ITEM_NAMES.get().into_iter().flatten() {
+            let upper = name.to_ascii_uppercase();
+            if WEARS.iter().any(|w| upper.ends_with(w)) || OTHERS.contains(&name.as_str()) {
+                let n = horizon_mod::query(serde_json::json!({ "op": "items_item", "item": name }))["max_damage"].as_i64().unwrap_or(0);
+                if n > 0 {
+                    max.insert(name.clone(), n);
+                }
+            }
+        }
+        let _ = MAX_DAMAGE.set(max);
+    }
     true
 }
 
@@ -1111,8 +1279,24 @@ fn refresh_hover() {
     let Some(names) = ITEM_NAMES.get() else { return };
     let s = shop();
     let online: HashSet<String> = players.iter().map(uuid_hex).collect();
+    let every_second = PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 4 == 0;
     for p in &players {
         let uuid = uuid_hex(p);
+        let touched = {
+            let mut all = TOUCHED.lock().unwrap_or_else(|e| e.into_inner());
+            let all = all.get_or_insert_with(HashMap::new);
+            let left = all.get(&uuid).copied().unwrap_or(0);
+            if left > 1 {
+                all.insert(uuid.clone(), left - 1);
+            } else {
+                all.remove(&uuid);
+            }
+            left > 0
+        };
+        // Four passes a second for a player with news, one a second for the rest.
+        if !touched && !every_second {
+            continue;
+        }
         // (slot, item, amount) of each stack with no components: the ones that get lines.
         // Slots 0-35 as SetPlayerInventory numbers them, and the off hand as 40.
         let inventory = p.get_inventory();
@@ -1133,9 +1317,8 @@ fn refresh_hover() {
             *carried.entry(item.clone()).or_default() += n;
         }
         let shown: Vec<(usize, Vec<String>)> =
-            plain.iter().filter_map(|(slot, item, n)| Some((*slot, worth_lines(&s, item, *n, carried.get(item).copied().unwrap_or(0))?))).collect();
+            plain.iter().filter_map(|(slot, item, n)| Some((*slot, worth_lines(&s, item, *n, carried.get(item).copied().unwrap_or(0), 1.0)?))).collect();
         CARRIED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(uuid.clone(), carried.clone());
-        let touched = TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).as_mut().is_some_and(|t| t.remove(&uuid));
         {
             let mut all = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
             let all = all.get_or_insert_with(HashMap::new);
@@ -1164,6 +1347,9 @@ fn refresh_hover() {
         }
     }
     if let Some(m) = CARRIED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.retain(|k, _| online.contains(k));
+    }
+    if let Some(m) = TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         m.retain(|k, _| online.contains(k));
     }
     if let Some(m) = SHOWN.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
@@ -1244,11 +1430,25 @@ fn sell(p: &Player, si: usize, ii: usize, amount: i64, shown: f64) {
     p.send_message(&s.msg("sold", &[("amount", n.to_string()), ("price", money(pay))]));
 }
 
+/// What a stack sells for at its worth: worn gear by the durability left, enchanted gear as plain; None for one with
+/// a name, lore or anything else of its own, or no value.
+fn stack_value(s: &Shop, st: &ItemStack) -> Option<f64> {
+    const ALLOWED: [&str; 3] = ["minecraft:damage", "minecraft:enchantments", "minecraft:repair_cost"];
+    let json = st.to_json();
+    if json["components"].as_object()?.keys().any(|k| !ALLOWED.contains(&k.as_str())) {
+        return None;
+    }
+    let item = json["item"].as_str()?;
+    let damage = st.get_component("minecraft:damage").and_then(Value::as_i64).unwrap_or(0);
+    Some(item_worth(s, item)? * wear_of(item, damage)? * f64::from(st.get_amount()))
+}
+
 /// The sell chest closed: plain, undamaged items with a sell price are paid for, everything else goes back.
 fn sell_chest(p: &Player, items: Vec<Option<ItemStack>>) {
     let s = shop();
     let eco = economy::enabled();
     let mut sold: BTreeMap<String, (i64, Vec<ItemStack>)> = BTreeMap::new();
+    let mut other: (f64, i64, Vec<ItemStack>) = (0.0, 0, Vec::new());
     for (slot, st) in items.into_iter().enumerate() {
         let Some(st) = st else { continue };
         if slot == SELL_BUTTON {
@@ -1260,6 +1460,11 @@ fn sell_chest(p: &Player, items: Vec<Option<ItemStack>>) {
             let e = sold.entry(mat).or_default();
             e.0 += i64::from(st.get_amount());
             e.1.push(st);
+        } else if let Some(v) = stack_value(&s, &st).filter(|v| eco && *v > 0.0) {
+            // Everything else with a value (worn gear, enchanted gear, items off the shop pages) at its worth.
+            other.0 += v;
+            other.1 += i64::from(st.get_amount());
+            other.2.push(st);
         } else {
             inv::give(p, &st);
         }
@@ -1267,16 +1472,14 @@ fn sell_chest(p: &Player, items: Vec<Option<ItemStack>>) {
     if !eco {
         return p.send_message(&s.msg("no-economy", &[]));
     }
-    if sold.is_empty() {
+    if sold.is_empty() && other.2.is_empty() {
         return p.send_message(&s.msg("sold-none", &[]));
     }
-    let pay: f64 = sold.iter().filter_map(|(m, (n, _))| s.sell_item(m).map(|i| sell_now_total(&s, i, *n))).sum();
-    let count: i64 = sold.values().map(|(n, _)| n).sum();
+    let pay: f64 = sold.iter().filter_map(|(m, (n, _))| s.sell_item(m).map(|i| sell_now_total(&s, i, *n))).sum::<f64>() + other.0;
+    let count: i64 = sold.values().map(|(n, _)| n).sum::<i64>() + other.1;
     if !economy::deposit(p.get_name(), pay) {
-        for (_, stacks) in sold.values() {
-            for st in stacks {
-                inv::give(p, st);
-            }
+        for st in sold.values().flat_map(|(_, stacks)| stacks).chain(&other.2) {
+            inv::give(p, st);
         }
         return p.send_message(&s.msg("no-economy", &[]));
     }
@@ -1327,6 +1530,11 @@ fn shop_command(sender: &CommandSender, _label: &str, args: &[&str]) -> bool {
             let items: usize = s.pages.iter().map(|(_, p)| p.items.len()).sum();
             sender.send_message(&s.msg("reloaded", &[("shops", s.pages.len().to_string()), ("items", items.to_string())]));
         }
+        // The Menu's Balance button: your money the short way.
+        Some("balance") => match sender.as_player() {
+            Some(p) => p.send_message(&shop().msg("balance", &[("balance", balance(p))])),
+            None => sender.send_message("Only players have money here."),
+        },
         Some("pay") => match sender.as_player() {
             Some(p) => open_pay_players(p),
             None => sender.send_message("Only players can pay."),
@@ -1350,7 +1558,7 @@ fn on_enable(plugin: Plugin) {
     load_state();
     plugin.set_executor("shop", shop_command);
     plugin.set_tab_completer("shop", |s, _, a| {
-        let mut out = vec!["sell".to_owned(), "pay".to_owned()];
+        let mut out = vec!["sell".to_owned(), "pay".to_owned(), "balance".to_owned()];
         if s.has_permission("horizonshop.admin") {
             out.push("reload".to_owned());
         }
@@ -1369,7 +1577,11 @@ fn on_enable(plugin: Plugin) {
     horizon_mod::Host.on("pl_receive_raw", hover_in);
     horizon_mod::query(serde_json::json!({ "op": "packet_listen", "name": "raw:out" }));
     horizon_mod::query(serde_json::json!({ "op": "packet_listen", "name": "raw:in" }));
-    plugin.run_task_timer(40, 20, refresh_hover);
+    plugin.run_task_timer(40, 5, refresh_hover);
+    // `%horizonshop_balance%`: money the short way ($800M) for the TAB sidebar and any other plugin.
+    horizon_kit::hooks::provide_placeholders(&plugin, "horizonshop", |_, name, params| {
+        (params.eq_ignore_ascii_case("balance") && !name.is_empty()).then(|| money(economy::balance(name)))
+    });
     // Teleports said over the hotbar, where they fade, not in chat (Essentials' chat lines are blanked on the stick).
     plugin.register_event(|e: &mut horizon_bukkit::events::PlayerTeleportEvent| {
         if matches!(e.get_cause(), "PLUGIN" | "COMMAND") {
@@ -1468,6 +1680,33 @@ mod tests {
         assert_eq!(s.msg("worth-empty", &[]), s.msg("worth-empty", &[])); // falls back to the built-in text
     }
 
+    /// Every item has a value: shop pages first, then worth.yml, then what it's made of; creative-only blocks none.
+    #[test]
+    fn every_item_has_a_value_from_its_page_its_file_or_what_it_is_made_of() {
+        let s = defaults();
+        let w = |m: &str| item_worth(&s, m);
+        assert_eq!(w("minecraft:diamond"), Some(100.0));
+        assert_eq!(w("DIAMOND_SWORD"), Some(200.0));
+        assert_eq!(w("diamond_chestplate"), Some(800.0));
+        assert_eq!(w("NETHERITE_SWORD"), Some(2200.0));
+        assert_eq!(w("IRON_HELMET"), Some(25.0));
+        assert_eq!(w("WOODEN_PICKAXE"), Some(0.75));
+        assert_eq!(w("DIAMOND_BLOCK"), Some(900.0));
+        assert_eq!(w("DEEPSLATE_DIAMOND_ORE"), Some(100.0));
+        assert_eq!(w("REDSTONE_ORE"), Some(6.0));
+        assert_eq!(w("TOTEM_OF_UNDYING"), Some(800.0));
+        assert_eq!(w("ELYTRA"), Some(4000.0)); // buy-only on its page, so its worth.yml value
+        assert_eq!(w("RED_WOOL"), Some(1.0));
+        assert_eq!(w("LIGHT_BLUE_SHULKER_BOX"), Some(500.0));
+        assert_eq!(w("ACACIA_LOG"), Some(1.0));
+        assert_eq!(w("MUSIC_DISC_CAT"), Some(80.0));
+        assert_eq!(w("COBWEB"), Some(0.1));
+        assert_eq!(w("ZOMBIE_SPAWN_EGG"), None);
+        assert_eq!(w("BEDROCK"), None);
+        assert_eq!(w("AIR"), None);
+        assert_eq!(wear_of("minecraft:diamond_sword", 0), Some(1.0));
+    }
+
     #[test]
     fn prices_follow_trades_and_the_market_within_bounds() {
         let s = defaults();
@@ -1543,8 +1782,11 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(cash(1234.5), "$1,234.50");
-        assert_eq!(cash(0.1), "$0.10");
+        for (v, shown) in [(0.1, "$0.1"), (6.4, "$6.4"), (12.5, "$12.5"), (999.99, "$999.99"), (1000.0, "$1K"), (1999.0, "$1.9K"),
+            (5500.0, "$5.5K"), (0.29, "$0.29"), (2900.0, "$2.9K"), (999_999.0, "$999.9K"), (800_000_000.0, "$800M"), (1_234_000_000.0, "$1.2B"), (-3.0, "$0")]
+        {
+            assert_eq!(money(v), shown, "{v}");
+        }
         let names: Vec<String> = ["minecraft:air", "minecraft:stone", "minecraft:dirt", "minecraft:barrier"].map(String::from).to_vec();
         let ids = [cb::CONTAINER_SET_CONTENT, cb::CONTAINER_SET_SLOT, cb::SET_CURSOR_ITEM, cb::SET_PLAYER_INVENTORY];
         let mut named = Stack::new(2, 5);
@@ -1564,7 +1806,7 @@ mod tests {
         let Some(Component::Lore(lines)) = dirt.component(component::LORE) else { panic!("no lore on dirt") };
         let shown: Vec<String> = lines.iter().map(|l| { let mut s = String::new(); texts(l, &mut s); s }).collect();
         println!("{shown:?}");
-        assert_eq!(shown, ["Worth: $0.10 each", "This stack (64): $6.40", "All you carry (128): $12.80"]);
+        assert_eq!(shown, ["Worth: $0.1 each", "This stack (64): $6.4", "All you carry (128): $12.8"]);
         assert_eq!(p.items[2], Some(named), "a named stack is left alone");
         assert_eq!(p.items[3], Some(Stack::new(3, 1)), "the shop doesn't buy barriers");
         // Lines already on: nothing to do (what the timer sends passes the hook as it is).
